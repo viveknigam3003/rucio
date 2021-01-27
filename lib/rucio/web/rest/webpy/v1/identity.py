@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # Copyright 2018 CERN for the benefit of the ATLAS collaboration.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,7 +16,7 @@
 # Authors:
 # - Mario Lassnig <mario.lassnig@cern.ch>, 2012-2018
 # - Vincent Garonne <vincent.garonne@cern.ch>, 2013-2017
-# - Thomas Beermann <thomas.beermann@cern.ch>, 2017
+# - Thomas Beermann <thomas.beermann@cern.ch>, 2017-2020
 # - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2018-2019
 # - Andrew Lister <andrew.lister@stfc.ac.uk>, 2019
 #
@@ -196,4 +196,5 @@ class Accounts(RucioController):
 
 APP = application(URLS, globals())
 APP.add_processor(loadhook(rucio_loadhook))
-application = APP.wsgifunc()
+if __name__ != "rucio.web.rest.identity":
+    application = APP.wsgifunc()

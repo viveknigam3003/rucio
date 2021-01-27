@@ -1,4 +1,5 @@
-# Copyright 2013-2020 CERN for the benefit of the ATLAS collaboration.
+# -*- coding: utf-8 -*-
+# Copyright 2013-2020 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,44 +14,44 @@
 # limitations under the License.
 #
 # Authors:
-# - Vincent Garonne <vgaronne@gmail.com>, 2013-2018
-# - Martin Barisits <martin.barisits@cern.ch>, 2013-2019
+# - Vincent Garonne <vincent.garonne@cern.ch>, 2013-2018
+# - Martin Barisits <martin.barisits@cern.ch>, 2013-2020
 # - Cedric Serfon <cedric.serfon@cern.ch>, 2013-2020
 # - Ralph Vigne <ralph.vigne@cern.ch>, 2013
-# - Mario Lassnig <mario.lassnig@cern.ch>, 2013-2019
+# - Mario Lassnig <mario.lassnig@cern.ch>, 2013-2020
 # - Yun-Pin Sun <winter0128@gmail.com>, 2013
 # - Thomas Beermann <thomas.beermann@cern.ch>, 2013-2018
-# - Joaquin Bogado <jbogado@linti.unlp.edu.ar>, 2014-2015
-# - Wen Guan <wguan.icedew@gmail.com>, 2015
+# - Joaquín Bogado <jbogado@linti.unlp.edu.ar>, 2014-2015
+# - Wen Guan <wen.guan@cern.ch>, 2015
+# - asket <asket.agarwal96@gmail.com>, 2018
 # - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2018-2019
 # - Tobias Wegner <twegner@cern.ch>, 2019
 # - Andrew Lister <andrew.lister@stfc.ac.uk>, 2019
 # - Ruturaj Gujar <ruturaj.gujar23@gmail.com>, 2019
+# - Aristeidis Fkiaras <aristeidis.fkiaras@cern.ch>, 2020
 # - Brandon White <bjwhite@fnal.gov>, 2019
 # - Luc Goossens <luc.goossens@cern.ch>, 2020
-# - Aristeidis Fkiaras <aristeidis.fkiaras@cern.ch>, 2019 - 2020
+# - Eli Chadwick <eli.chadwick@stfc.ac.uk>, 2020
 # - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020
-#
-# PY3K COMPATIBLE
+# - Vivek Nigam <viveknigam.nigam3@gmail.com>, 2020
 
 import logging
 import random
 import sys
-
 from datetime import datetime, timedelta
+from enum import Enum
 from hashlib import md5
 from re import match
-from six import string_types
 
+from six import string_types
 from sqlalchemy import and_, or_, exists
 from sqlalchemy.exc import DatabaseError, IntegrityError
 from sqlalchemy.orm.exc import NoResultFound
 from sqlalchemy.sql import not_, func
 from sqlalchemy.sql.expression import bindparam, case, select, true
 
-import rucio.core.rule
 import rucio.core.replica  # import add_replicas
-
+import rucio.core.rule
 from rucio.common import exception
 from rucio.common.config import config_get
 from rucio.common.utils import str_to_date, is_archive, chunks
@@ -60,7 +61,6 @@ from rucio.core.monitor import record_timer_block, record_counter
 from rucio.core.naming_convention import validate_name
 from rucio.db.sqla import models, filter_thread_work
 from rucio.db.sqla.constants import DIDType, DIDReEvaluation, DIDAvailability, RuleState
-from rucio.db.sqla.enum import EnumSymbol
 from rucio.db.sqla.session import read_session, transactional_session, stream_session
 
 logging.basicConfig(stream=sys.stdout,
@@ -158,7 +158,7 @@ def add_dids(dids, account, session=None):
             try:
 
                 if isinstance(did['type'], string_types):
-                    did['type'] = DIDType.from_sym(did['type'])
+                    did['type'] = DIDType[did['type']]
 
                 if did['type'] == DIDType.FILE:
                     raise exception.UnsupportedOperation("Only collection (dataset/container) can be registered." % locals())
@@ -172,11 +172,12 @@ def add_dids(dids, account, session=None):
                 new_did = models.DataIdentifier(scope=did['scope'], name=did['name'], account=did.get('account') or account,
                                                 did_type=did['type'], monotonic=did.get('statuses', {}).get('monotonic', False),
                                                 is_open=True, expired_at=expired_at)
-                # Add metadata
-                for key in did.get('meta', {}):
-                    new_did.update({key: did['meta'][key]})
 
                 new_did.save(session=session, flush=False)
+
+                if 'meta' in did and did['meta']:
+                    # Add metadata
+                    set_metadata_bulk(scope=did['scope'], name=did['name'], meta=did['meta'], recursive=False, session=session)
 
                 if did.get('dids', None):
                     attach_dids(scope=did['scope'], name=did['name'], dids=did['dids'],
@@ -835,8 +836,8 @@ def list_new_dids(did_type, thread=None, total_threads=None, chunk_size=1000, se
 
     if did_type:
         if isinstance(did_type, string_types):
-            query = query.filter_by(did_type=DIDType.from_sym(did_type))
-        elif isinstance(did_type, EnumSymbol):
+            query = query.filter_by(did_type=DIDType[did_type])
+        elif isinstance(did_type, Enum):
             query = query.filter_by(did_type=did_type)
 
     query = filter_thread_work(session=session, query=query, total_threads=total_threads, thread_id=thread, hash_variable='name')
@@ -1108,10 +1109,13 @@ def scope_list(scope, name=None, recursive=False, session=None):
 
     def __topdids(scope):
         c = session.query(models.DataIdentifierAssociation.child_name).filter_by(scope=scope, child_scope=scope)
-        q = session.query(models.DataIdentifier.name, models.DataIdentifier.did_type).filter_by(scope=scope)  # add type
+        q = session.query(models.DataIdentifier.name, models.DataIdentifier.did_type, models.DataIdentifier.bytes).filter_by(scope=scope)  # add type
         s = q.filter(not_(models.DataIdentifier.name.in_(c))).order_by(models.DataIdentifier.name)
         for row in s.yield_per(5):
-            yield {'scope': scope, 'name': row.name, 'type': row.did_type, 'parent': None, 'level': 0}
+            if row.did_type == DIDType.FILE:
+                yield {'scope': scope, 'name': row.name, 'type': row.did_type, 'parent': None, 'level': 0, 'bytes': row.bytes}
+            else:
+                yield {'scope': scope, 'name': row.name, 'type': row.did_type, 'parent': None, 'level': 0, 'bytes': None}
 
     def __diddriller(pdid):
         query_associ = session.query(models.DataIdentifierAssociation).filter_by(scope=pdid['scope'], name=pdid['name'])
@@ -1235,6 +1239,20 @@ def set_metadata(scope, name, key, value, type=None, did=None,
     :param session: The database session in use.
     """
     did_meta_plugins.set_metadata(scope=scope, name=name, key=key, value=value, recursive=recursive, session=session)
+
+
+@transactional_session
+def set_metadata_bulk(scope, name, meta, recursive=False, session=None):
+    """
+    Add metadata to data identifier.
+
+    :param scope: The scope name.
+    :param name: The data identifier name.
+    :param meta: the key-values.
+    :param recursive: Option to propagate the metadata change to content.
+    :param session: The database session in use.
+    """
+    did_meta_plugins.set_metadata_bulk(scope=scope, name=name, meta=meta, recursive=recursive, session=session)
 
 
 @read_session
@@ -1901,4 +1919,98 @@ def insert_content_history(content_clause, did_created_at, session=None):
             created_at=cont.created_at,
             did_created_at=new_did_created_at,
             deleted_at=datetime.utcnow()
+        ).save(session=session, flush=False)
+
+
+@transactional_session
+def insert_deleted_dids(did_clause, session=None):
+    """
+    Insert into deleted_dids a list of did
+
+    :param did_clause: DID clause of the files to archive
+    :param session: The database session in use.
+    """
+    query = session.query(models.DataIdentifier.scope,
+                          models.DataIdentifier.name,
+                          models.DataIdentifier.account,
+                          models.DataIdentifier.did_type,
+                          models.DataIdentifier.is_open,
+                          models.DataIdentifier.monotonic,
+                          models.DataIdentifier.hidden,
+                          models.DataIdentifier.obsolete,
+                          models.DataIdentifier.complete,
+                          models.DataIdentifier.is_new,
+                          models.DataIdentifier.availability,
+                          models.DataIdentifier.suppressed,
+                          models.DataIdentifier.bytes,
+                          models.DataIdentifier.length,
+                          models.DataIdentifier.md5,
+                          models.DataIdentifier.adler32,
+                          models.DataIdentifier.expired_at,
+                          models.DataIdentifier.purge_replicas,
+                          models.DataIdentifier.deleted_at,
+                          models.DataIdentifier.events,
+                          models.DataIdentifier.guid,
+                          models.DataIdentifier.project,
+                          models.DataIdentifier.datatype,
+                          models.DataIdentifier.run_number,
+                          models.DataIdentifier.stream_name,
+                          models.DataIdentifier.prod_step,
+                          models.DataIdentifier.version,
+                          models.DataIdentifier.campaign,
+                          models.DataIdentifier.task_id,
+                          models.DataIdentifier.panda_id,
+                          models.DataIdentifier.lumiblocknr,
+                          models.DataIdentifier.provenance,
+                          models.DataIdentifier.phys_group,
+                          models.DataIdentifier.transient,
+                          models.DataIdentifier.accessed_at,
+                          models.DataIdentifier.closed_at,
+                          models.DataIdentifier.eol_at,
+                          models.DataIdentifier.is_archive,
+                          models.DataIdentifier.constituent,
+                          models.DataIdentifier.access_cnt).\
+        filter(or_(*did_clause))
+
+    for did in query.all():
+        models.DeletedDataIdentifier(
+            scope=did.scope,
+            name=did.name,
+            account=did.account,
+            did_type=did.did_type,
+            is_open=did.is_open,
+            monotonic=did.monotonic,
+            hidden=did.hidden,
+            obsolete=did.obsolete,
+            complete=did.complete,
+            is_new=did.is_new,
+            availability=did.availability,
+            suppressed=did.suppressed,
+            bytes=did.bytes,
+            length=did.length,
+            md5=did.md5,
+            adler32=did.adler32,
+            expired_at=did.expired_at,
+            purge_replicas=did.purge_replicas,
+            deleted_at=datetime.utcnow(),
+            events=did.events,
+            guid=did.guid,
+            project=did.project,
+            datatype=did.datatype,
+            run_number=did.run_number,
+            stream_name=did.stream_name,
+            prod_step=did.prod_step,
+            version=did.version,
+            campaign=did.campaign,
+            task_id=did.task_id,
+            panda_id=did.panda_id,
+            lumiblocknr=did.lumiblocknr,
+            provenance=did.provenance,
+            phys_group=did.phys_group,
+            transient=did.transient,
+            accessed_at=did.accessed_at,
+            closed_at=did.closed_at,
+            eol_at=did.eol_at,
+            is_archive=did.is_archive,
+            constituent=did.constituent
         ).save(session=session, flush=False)

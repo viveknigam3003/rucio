@@ -1,4 +1,4 @@
-# Copyright 2015-2018 CERN for the benefit of the ATLAS collaboration.
+# Copyright 2015-2020 CERN for the benefit of the ATLAS collaboration.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,11 +13,13 @@
 # limitations under the License.
 #
 # Authors:
-# - Vincent Garonne <vgaronne@gmail.com>, 2015-2018
-# - Wen Guan <wguan.icedew@gmail.com>, 2016
+# - Vincent Garonne <vincent.garonne@cern.ch>, 2015-2018
+# - Wen Guan <wen.guan@cern.ch>, 2016
 # - Mario Lassnig <mario.lassnig@cern.ch>, 2017-2019
 # - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2019
 # - Eric Vaandering <ewv@fnal.gov>, 2019
+# - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020
+# - Thomas Beermann <thomas.beermann@cern.ch>, 2021
 #
 # PY3K COMPATIBLE
 
@@ -95,7 +97,7 @@ def mysql_ping_listener(dbapi_conn, connection_rec, connection_proxy):
             raise
 
 
-def mysql_convert_decimal_to_float():
+def mysql_convert_decimal_to_float(pymysql=False):
     """
     The default datatype returned by mysql-python for numerics is decimal.Decimal.
     This type cannot be serialised to JSON, therefore we need to autoconvert to floats.
@@ -106,6 +108,17 @@ def mysql_convert_decimal_to_float():
     """
 
     converter = None
+    if pymysql:
+        try:
+            from pymysql.constants import FIELD_TYPE
+            from pymysql.converters import conversions as conv
+            converter = conv.copy()
+            converter[FIELD_TYPE.DECIMAL] = float
+            converter[FIELD_TYPE.NEWDECIMAL] = float
+        except ImportError:
+            raise RucioException('Trying to use pymysql without having it installed!')
+        return converter
+
     try:
         import MySQLdb.converters  # pylint: disable=import-error
         from MySQLdb.constants import FIELD_TYPE  # pylint: disable=import-error
@@ -167,7 +180,7 @@ def get_engine(echo=True):
                          ('pool_reset_on_return', str), ('use_threadlocal', int)]
         params = {}
         if 'mysql' in sql_connection:
-            conv = mysql_convert_decimal_to_float()
+            conv = mysql_convert_decimal_to_float(pymysql=sql_connection.startswith('mysql+pymysql'))
             params['connect_args'] = {'conv': conv}
         for param, param_type in config_params:
             try:
@@ -244,7 +257,6 @@ def get_session():
 
 def retry_if_db_connection_error(exception):
     """Return True if error in connecting to db."""
-    print(exception)
     if isinstance(exception, (OperationalError, DatabaseException)):
         conn_err_codes = ('2002', '2003', '2006',  # MySQL
                           'ORA-00028',  # Oracle session has been killed
@@ -327,11 +339,9 @@ def stream_session(function):
                 for row in function(*args, **kwargs):
                     yield row
             except TimeoutError as error:
-                print(error)
                 session.rollback()  # pylint: disable=maybe-no-member
                 raise DatabaseException(str(error))
             except DatabaseError as error:
-                print(error)
                 session.rollback()  # pylint: disable=maybe-no-member
                 raise DatabaseException(str(error))
             except:
@@ -365,11 +375,9 @@ def transactional_session(function):
                 result = function(*args, **kwargs)
                 session.commit()  # pylint: disable=maybe-no-member
             except TimeoutError as error:
-                print(error)
                 session.rollback()  # pylint: disable=maybe-no-member
                 raise DatabaseException(str(error))
             except DatabaseError as error:
-                print(error)
                 session.rollback()  # pylint: disable=maybe-no-member
                 raise DatabaseException(str(error))
             except:

@@ -1,4 +1,5 @@
-# Copyright 2015-2019 CERN for the benefit of the ATLAS collaboration.
+# -*- coding: utf-8 -*-
+# Copyright 2015-2021 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,42 +14,49 @@
 # limitations under the License.
 #
 # Authors:
-# - Vincent Garonne <vgaronne@gmail.com>, 2015-2016
-# - Martin Barisits <martin.barisits@cern.ch>, 2017
-# - Mario Lassnig <mario@lassnig.net>, 2018-2019
+# - Vincent Garonne <vincent.garonne@cern.ch>, 2015-2016
+# - Martin Barisits <martin.barisits@cern.ch>, 2017-2019
+# - Mario Lassnig <mario.lassnig@cern.ch>, 2018-2019
 # - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2019
 # - Andrew Lister <andrew.lister@stfc.ac.uk>, 2019
 # - Ruturaj Gujar <ruturaj.gujar23@gmail.com>, 2019
-#
-# PY3K COMPATIBLE
+# - Eli Chadwick <eli.chadwick@stfc.ac.uk>, 2020
+# - Eric Vaandering <ewv@fnal.gov>, 2020
+# - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
+# - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020-2021
 
 from __future__ import print_function
-from base64 import b64encode
+
 from datetime import datetime
 from hashlib import sha256
 from os import urandom
 from traceback import format_exc
+from typing import TYPE_CHECKING
 
 from alembic import command
 from alembic.config import Config
-
-from six import PY3
-
 from sqlalchemy import func
 from sqlalchemy.engine import reflection
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.schema import CreateSchema, MetaData, Table, DropTable, ForeignKeyConstraint, DropConstraint
 from sqlalchemy.sql.expression import select, text
 
+from rucio import alembicrevision
 from rucio.common.config import config_get
 from rucio.common.types import InternalAccount
 from rucio.core.account_counter import create_counters_for_new_account
-from rucio.db.sqla import session, models
+from rucio.db.sqla import models
 from rucio.db.sqla.constants import AccountStatus, AccountType, IdentityType
+from rucio.db.sqla.session import get_engine, get_session, get_dump_engine
+
+if TYPE_CHECKING:
+    from typing import Optional  # noqa: F401
+    from sqlalchemy.orm import Session  # noqa: F401
 
 
-def build_database(echo=True, tests=False):
+def build_database(echo=True):
     """ Applies the schema to the database. Run this command once to build the database. """
-    engine = session.get_engine(echo=echo)
+    engine = get_engine(echo=echo)
 
     schema = config_get('database', 'schema', raise_exception=False)
     if schema:
@@ -67,13 +75,13 @@ def build_database(echo=True, tests=False):
 
 def dump_schema():
     """ Creates a schema dump to a specific database. """
-    engine = session.get_dump_engine()
+    engine = get_dump_engine()
     models.register_models(engine)
 
 
 def destroy_database(echo=True):
     """ Removes the schema from the database. Only useful for test cases or malicious intents. """
-    engine = session.get_engine(echo=echo)
+    engine = get_engine(echo=echo)
 
     try:
         models.unregister_models(engine)
@@ -86,7 +94,7 @@ def drop_everything(echo=True):
         metadata.drop_all() as it handles cyclical constraints between tables.
         Ref. http://www.sqlalchemy.org/trac/wiki/UsageRecipes/DropEverything
     """
-    engine = session.get_engine(echo=echo)
+    engine = get_engine(echo=echo)
     conn = engine.connect()
 
     # the transaction only applies if the DB supports
@@ -133,7 +141,7 @@ def drop_everything(echo=True):
 def create_base_vo():
     """ Creates the base VO """
 
-    s = session.get_session()
+    s = get_session()
 
     vo = models.VO(vo='def', description='Default base VO', email='N/A')
 
@@ -141,8 +149,12 @@ def create_base_vo():
     s.commit()
 
 
-def create_root_account():
-    """ Inserts the default root account to an existing database. Make sure to change the default password later. """
+def create_root_account(create_counters=True):
+    """
+    Inserts the default root account to an existing database. Make sure to change the default password later.
+
+    :param create_counters: If True, create counters for the new account at existing RSEs.
+    """
 
     multi_vo = bool(config_get('common', 'multi_vo', False, False))
 
@@ -174,7 +186,7 @@ def create_root_account():
         pass
         # print 'Config values are missing (check rucio.cfg{.template}). Using hardcoded defaults.'
 
-    s = session.get_session()
+    s = get_session()
 
     if multi_vo:
         access = 'super_root'
@@ -184,11 +196,7 @@ def create_root_account():
     account = models.Account(account=InternalAccount(access, 'def'), account_type=AccountType.SERVICE, status=AccountStatus.ACTIVE)
 
     salt = urandom(255)
-    if PY3:
-        decoded_salt = b64encode(salt).decode()
-        salted_password = ('%s%s' % (decoded_salt, up_pwd)).encode()
-    else:
-        salted_password = '%s%s' % (salt, str(up_pwd))
+    salted_password = salt + up_pwd.encode()
     hashed_password = sha256(salted_password).hexdigest()
     identity1 = models.Identity(identity=up_id, identity_type=IdentityType.USERPASS, password=hashed_password, salt=salt, email=up_email)
     iaa1 = models.IdentityAccountAssociation(identity=identity1.identity, identity_type=identity1.identity_type, account=account.account, is_default=True)
@@ -206,10 +214,18 @@ def create_root_account():
     iaa4 = models.IdentityAccountAssociation(identity=identity4.identity, identity_type=identity4.identity_type, account=account.account, is_default=True)
 
     # Account counters
-    create_counters_for_new_account(account=account.account, session=s)
+    if create_counters:
+        create_counters_for_new_account(account=account.account, session=s)
 
     # Apply
-    s.add_all([account, identity1, identity2, identity3, identity4])
+    for identity in [identity1, identity2, identity3, identity4]:
+        try:
+            s.add(identity)
+            s.commit()
+        except IntegrityError:
+            # Identities may already be in the DB when running multi-VO conversion
+            s.rollback()
+    s.add(account)
     s.commit()
     s.add_all([iaa1, iaa2, iaa3, iaa4])
     s.commit()
@@ -217,7 +233,7 @@ def create_root_account():
 
 def get_db_time():
     """ Gives the utc time on the db. """
-    s = session.get_session()
+    s = get_session()
     try:
         storage_date_format = None
         if s.bind.dialect.name == 'oracle':
@@ -249,3 +265,40 @@ def get_count(q):
     count_q = q.statement.with_only_columns([func.count()]).order_by(None)
     count = q.session.execute(count_q).scalar()
     return count
+
+
+def is_old_db():
+    """
+    Returns true, if alembic is used and the database is not on the
+    same revision as the code base.
+    """
+    schema = config_get('database', 'schema', raise_exception=False)
+
+    # checks if alembic is being used by looking up the AlembicVersion table
+    if not get_engine().has_table(models.AlembicVersion.__tablename__, schema):
+        return False
+
+    s = get_session()
+    query = s.query(models.AlembicVersion.version_num)
+    return query.count() != 0 and str(query.first()[0]) != alembicrevision.ALEMBIC_REVISION
+
+
+def json_implemented(session=None):
+    """
+    Checks if the database on the current server installation can support json fields.
+
+    :param session: The active session of the database.
+    :type session: Optional[Session]
+    :returns: True, if json is supported, False otherwise.
+    """
+    if session is None:
+        session = get_session()
+
+    if session.bind.dialect.name == 'oracle':
+        oracle_version = int(session.connection().connection.version.split('.')[0])
+        if oracle_version < 12:
+            return False
+    elif session.bind.dialect.name == 'sqlite':
+        return False
+
+    return True

@@ -1,4 +1,5 @@
-# Copyright 2015-2018 CERN for the benefit of the ATLAS collaboration.
+# -*- coding: utf-8 -*-
+# Copyright 2015-2021 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,12 +14,13 @@
 # limitations under the License.
 #
 # Authors:
-# - Wen Guan <wguan.icedew@gmail.com>, 2015-2016
-# - Vincent Garonne <vgaronne@gmail.com>, 2015-2018
+# - Wen Guan <wen.guan@cern.ch>, 2015-2016
+# - Vincent Garonne <vincent.garonne@cern.ch>, 2015-2018
 # - Martin Barisits <martin.barisits@cern.ch>, 2016-2017
 # - Cedric Serfon <cedric.serfon@cern.ch>, 2018
-#
-# PY3K COMPATIBLE
+# - Thomas Beermann <thomas.beermann@cern.ch>, 2020
+# - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020
+# - Mario Lassnig <mario.lassnig@cern.ch>, 2021
 
 """
 Conveyor is a daemon to manage file transfers.
@@ -27,19 +29,20 @@ Conveyor is a daemon to manage file transfers.
 import datetime
 import logging
 import os
-import sys
 import socket
+import sys
 import threading
 import time
 import traceback
 
 from requests.exceptions import RequestException
 
+import rucio.db.sqla.util
+from rucio.common import exception
 from rucio.common.config import config_get
 from rucio.core import heartbeat, transfer, request
 from rucio.core.monitor import record_timer, record_counter
 from rucio.db.sqla.constants import FTSState
-
 
 logging.basicConfig(stream=sys.stdout,
                     level=getattr(logging,
@@ -78,7 +81,10 @@ def poller_latest(external_hosts, once=False, last_nhours=1, fts_wait=1800):
                 logging.debug('polling latest %s hours on host: %s' % (last_nhours, external_host))
                 ts = time.time()
                 resps = None
-                state = [str(FTSState.FINISHED), str(FTSState.FAILED), str(FTSState.FINISHEDDIRTY), str(FTSState.CANCELED)]
+                state = [str(FTSState.FINISHED.name),
+                         str(FTSState.FAILED.name),
+                         str(FTSState.FINISHEDDIRTY.name),
+                         str(FTSState.CANCELED.name)]
                 try:
                     resps = transfer.query_latest(external_host, state=state, last_nhours=last_nhours)
                 except Exception:
@@ -135,6 +141,8 @@ def run(once=False, last_nhours=1, external_hosts=None, fts_wait=1800, total_thr
     """
     Starts up the conveyer threads.
     """
+    if rucio.db.sqla.util.is_old_db():
+        raise exception.DatabaseException('Database was not updated, daemon won\'t start')
 
     if not external_hosts:
         external_hosts = []

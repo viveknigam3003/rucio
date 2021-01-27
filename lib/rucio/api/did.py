@@ -1,38 +1,48 @@
-'''
-  Copyright European Organization for Nuclear Research (CERN)
-
-  Licensed under the Apache License, Version 2.0 (the "License");
-  You may not use this file except in compliance with the License.
-  You may obtain a copy of the
-  License at http://www.apache.org/licenses/LICENSE-2.0
-
-  Authors:
-  - Vincent Garonne, <vincent.garonne@cern.ch>, 2012-2017
-  - Mario Lassnig, <mario.lassnig@cern.ch>, 2012-2015
-  - Yun-Pin Sun, <yun-pin.sun@cern.ch>, 2013
-  - Cedric Serfon, <cedric.serfon@cern.ch>, 2013-2020
-  - Martin Barisits, <martin.barisits@cern.ch>, 2014-2015
-  - Hannes Hansen, <hannes.jakob.hansen@cern.ch>, 2018-2019
-  - Andrew Lister, <andrew.lister@stfc.ac.uk>, 2019
-  - Ruturaj Gujar, <ruturaj.gujar23@gmail.com>, 2019
-  - Eli Chadwick, <eli.chadwick@stfc.ac.uk>, 2020
-
-  PY3K COMPATIBLE
-'''
+# -*- coding: utf-8 -*-
+# Copyright 2013-2020 CERN
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Authors:
+# - Vincent Garonne <vincent.garonne@cern.ch>, 2013-2017
+# - Cedric Serfon <cedric.serfon@cern.ch>, 2013-2020
+# - Ralph Vigne <ralph.vigne@cern.ch>, 2013
+# - Mario Lassnig <mario.lassnig@cern.ch>, 2013-2020
+# - Yun-Pin Sun <winter0128@gmail.com>, 2013
+# - Thomas Beermann <thomas.beermann@cern.ch>, 2013
+# - Martin Barisits <martin.barisits@cern.ch>, 2014-2020
+# - asket <asket.agarwal96@gmail.com>, 2018
+# - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2018-2019
+# - Andrew Lister <andrew.lister@stfc.ac.uk>, 2019
+# - Ruturaj Gujar <ruturaj.gujar23@gmail.com>, 2019
+# - Eli Chadwick <eli.chadwick@stfc.ac.uk>, 2020
+# - Eric Vaandering <ewv@fnal.gov>, 2020
+# - Aristeidis Fkiaras <aristeidis.fkiaras@cern.ch>, 2020
+# - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
+# - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020
 
 from __future__ import print_function
 
 from copy import deepcopy
 
 import rucio.api.permission
-
-from rucio.core import did, naming_convention, meta as meta_core
-from rucio.core.rse import get_rse_id
 from rucio.common.constants import RESERVED_KEYS
 from rucio.common.exception import RucioException
 from rucio.common.schema import validate_schema
 from rucio.common.types import InternalAccount, InternalScope
 from rucio.common.utils import api_update_return_dict
+from rucio.core import did, naming_convention, meta as meta_core
+from rucio.core.rse import get_rse_id
 from rucio.db.sqla.constants import DIDType
 
 
@@ -50,7 +60,7 @@ def list_dids(scope, filters, type='collection', ignore_case=False, limit=None, 
     :param recursive: Recursively list DIDs content.
     :param vo: The VO to act on.
     """
-    validate_schema(name='did_filters', obj=filters)
+    validate_schema(name='did_filters', obj=filters, vo=vo)
 
     scope = InternalScope(scope, vo=vo)
 
@@ -79,7 +89,7 @@ def list_dids_extended(scope, filters, type='collection', ignore_case=False, lim
     :param long: Long format option to display more information for each DID.
     :param recursive: Recursively list DIDs content.
     """
-    validate_schema(name='did_filters', obj=filters)
+    validate_schema(name='did_filters', obj=filters, vo=vo)
     scope = InternalScope(scope, vo=vo)
 
     if 'account' in filters:
@@ -112,9 +122,9 @@ def add_did(scope, name, type, issuer, account=None, statuses={}, meta={}, rules
     :param vo: The VO to act on.
     """
     v_did = {'name': name, 'type': type.upper(), 'scope': scope}
-    validate_schema(name='did', obj=v_did)
-    validate_schema(name='dids', obj=dids)
-    validate_schema(name='rse', obj=rse)
+    validate_schema(name='did', obj=v_did, vo=vo)
+    validate_schema(name='dids', obj=dids, vo=vo)
+    validate_schema(name='rse', obj=rse, vo=vo)
     kwargs = {'scope': scope, 'name': name, 'type': type, 'issuer': issuer, 'account': account, 'statuses': statuses, 'meta': meta, 'rules': rules, 'lifetime': lifetime}
     if not rucio.api.permission.has_permission(issuer=issuer, vo=vo, action='add_did', kwargs=kwargs):
         raise rucio.common.exception.AccessDenied('Account %s can not add data identifier to scope %s' % (issuer, scope))
@@ -145,9 +155,9 @@ def add_did(scope, name, type, issuer, account=None, statuses={}, meta={}, rules
                 raise rucio.common.exception.InvalidObject("Provided metadata %s doesn't match the naming convention: %s != %s" % (k, meta[k], extra_meta[k]))
 
         # Validate metadata
-        meta_core.validate_meta(meta=meta, did_type=DIDType.from_sym(type))
+        meta_core.validate_meta(meta=meta, did_type=DIDType[type.upper()])
 
-    return did.add_did(scope=scope, name=name, type=DIDType.from_sym(type), account=account or issuer,
+    return did.add_did(scope=scope, name=name, type=DIDType[type.upper()], account=account or issuer,
                        statuses=statuses, meta=meta, rules=rules, lifetime=lifetime,
                        dids=dids, rse_id=rse_id)
 
@@ -174,6 +184,8 @@ def add_dids(dids, issuer, vo='def'):
     issuer = InternalAccount(issuer, vo=vo)
     for d in dids:
         d['scope'] = InternalScope(d['scope'], vo=vo)
+        if 'account' in d.keys():
+            d['account'] = InternalAccount(d['account'], vo=vo)
         if 'dids' in d.keys():
             for child in d['dids']:
                 child['scope'] = InternalScope(child['scope'], vo=vo)
@@ -188,7 +200,7 @@ def attach_dids(scope, name, attachment, issuer, vo='def'):
     :param issuer: The issuer account.
     :param vo: The VO to act on.
     """
-    validate_schema(name='attachment', obj=attachment)
+    validate_schema(name='attachment', obj=attachment, vo=vo)
 
     rse_id = None
     if 'rse' in attachment:
@@ -206,6 +218,8 @@ def attach_dids(scope, name, attachment, issuer, vo='def'):
         attachment['account'] = InternalAccount(attachment['account'], vo=vo)
     for d in attachment['dids']:
         d['scope'] = InternalScope(d['scope'], vo=vo)
+        if 'account' in d.keys():
+            d['account'] = InternalAccount(d['account'], vo=vo)
 
     if rse_id is not None:
         dids = did.attach_dids(scope=scope, name=name, dids=attachment['dids'],
@@ -226,7 +240,7 @@ def attach_dids_to_dids(attachments, issuer, ignore_duplicate=False, vo='def'):
     :param ignore_duplicate: If True, ignore duplicate entries.
     :param vo: The VO to act on.
     """
-    validate_schema(name='attachments', obj=attachments)
+    validate_schema(name='attachments', obj=attachments, vo=vo)
 
     for a in attachments:
         if 'rse' in a:
@@ -243,6 +257,8 @@ def attach_dids_to_dids(attachments, issuer, ignore_duplicate=False, vo='def'):
         attachment['scope'] = InternalScope(attachment['scope'], vo=vo)
         for d in attachment['dids']:
             d['scope'] = InternalScope(d['scope'], vo=vo)
+            if 'account' in d.keys():
+                d['account'] = InternalAccount(d['account'], vo=vo)
 
     return did.attach_dids_to_dids(attachments=attachments, account=issuer,
                                    ignore_duplicate=ignore_duplicate)
@@ -279,7 +295,7 @@ def list_new_dids(type=None, thread=None, total_threads=None, chunk_size=1000, v
     :param chunk_size: Number of requests to return per yield.
     :param vo: The VO to act on.
     """
-    dids = did.list_new_dids(did_type=type and DIDType.from_sym(type), thread=thread, total_threads=total_threads, chunk_size=chunk_size)
+    dids = did.list_new_dids(did_type=type and DIDType[type.upper()], thread=thread, total_threads=total_threads, chunk_size=chunk_size)
     for d in dids:
         if d['scope'].vo == vo:
             yield api_update_return_dict(d)
@@ -414,6 +430,30 @@ def set_metadata(scope, name, key, value, issuer, recursive=False, vo='def'):
     return did.set_metadata(scope=scope, name=name, key=key, value=value, recursive=recursive)
 
 
+def set_metadata_bulk(scope, name, meta, issuer, recursive=False, vo='def'):
+    """
+    Add metadata to data did.
+
+    :param scope: The scope name.
+    :param name: The data identifier name.
+    :param meta: the key-values.
+    :param issuer: The issuer account.
+    :param recursive: Option to propagate the metadata update to content.
+    :param vo: The VO to act on.
+    """
+    kwargs = {'scope': scope, 'name': name, 'meta': meta, 'issuer': issuer}
+
+    for key in meta:
+        if key in RESERVED_KEYS:
+            raise rucio.common.exception.AccessDenied('Account %s can not change the value of the metadata key %s to data identifier %s:%s' % (issuer, key, scope, name))
+
+    if not rucio.api.permission.has_permission(issuer=issuer, vo=vo, action='set_metadata_bulk', kwargs=kwargs):
+        raise rucio.common.exception.AccessDenied('Account %s can not add metadata to data identifier %s:%s' % (issuer, scope, name))
+
+    scope = InternalScope(scope, vo=vo)
+    return did.set_metadata_bulk(scope=scope, name=name, meta=meta, recursive=recursive)
+
+
 def get_metadata(scope, name, plugin='DID_COLUMN', vo='def'):
     """
     Get data identifier metadata
@@ -436,7 +476,7 @@ def get_metadata_bulk(dids, vo='def', session=None):
     :param session: The database session in use.
     """
 
-    validate_schema(name='dids', obj=dids)
+    validate_schema(name='dids', obj=dids, vo=vo)
     for entry in dids:
         entry['scope'] = InternalScope(entry['scope'], vo=vo)
     meta = did.get_metadata_bulk(dids)
@@ -546,7 +586,7 @@ def resurrect(dids, issuer, vo='def'):
     kwargs = {'issuer': issuer}
     if not rucio.api.permission.has_permission(issuer=issuer, vo=vo, action='resurrect', kwargs=kwargs):
         raise rucio.common.exception.AccessDenied('Account %s can not resurrect data identifiers' % (issuer))
-    validate_schema(name='dids', obj=dids)
+    validate_schema(name='dids', obj=dids, vo=vo)
 
     for d in dids:
         d['scope'] = InternalScope(d['scope'], vo=vo)

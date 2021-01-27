@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright 2017-2019 CERN for the benefit of the ATLAS collaboration.
+# Copyright 2017-2020 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,6 +19,8 @@
 # - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2018-2019
 # - Mario Lassnig <mario.lassnig@cern.ch>, 2019
 # - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
+# - Eli Chadwick <eli.chadwick@stfc.ac.uk>, 2020
+# - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020
 
 memcached -u root -d
 
@@ -40,8 +42,7 @@ do
     r) activate_rse="true";;
   esac
 done
-
-cp /opt/rucio/etc/rucio_multi_vo_tst.cfg /opt/rucio/etc/rucio.cfg
+export RUCIO_HOME=/opt/rucio/etc/multi_vo/tst
 
 echo 'Clearing memcache'
 echo flush_all > /dev/tcp/127.0.0.1/11211
@@ -71,18 +72,13 @@ if [ -f /tmp/rucio.db ]; then
 fi
 
 echo 'Running full alembic migration'
-alembic -c /opt/rucio/etc/alembic.ini downgrade base
+ALEMBIC_CONFIG="/opt/rucio/etc/alembic.ini" tools/alembic_migration.sh
 if [ $? != 0 ]; then
-    echo 'Failed to downgrade the database!'
-    exit 1
-fi
-alembic -c /opt/rucio/etc/alembic.ini upgrade head
-if [ $? != 0 ]; then
-    echo 'Failed to upgrade the database!'
+    echo 'Failed to run alembic migration!'
     exit 1
 fi
 
-echo 'Bootstrap tests: Create jdoe account/mock scope'
+echo 'Bootstrapping tests'
 tools/bootstrap_tests.py
 if [ $? != 0 ]; then
     echo 'Failed to bootstrap!'
@@ -100,13 +96,6 @@ echo 'Sync metadata keys'
 tools/sync_meta.py
 if [ $? != 0 ]; then
     echo 'Failed to sync!'
-    exit 1
-fi
-
-echo 'Bootstrap tests: Create jdoe account/mock scope'
-tools/bootstrap_tests.py
-if [ $? != 0 ]; then
-    echo 'Failed to bootstrap!'
     exit 1
 fi
 
@@ -115,27 +104,24 @@ if test ${activate_rse}; then
     tools/docker_activate_rses.sh
 fi
 
-
 if test ${init_only}; then
     exit
 fi
 
 echo 'Running tests on VO "tst"'
-noseopts="--exclude=test_alembic --exclude=.*test_rse_protocol_.* --exclude=test_rucio_server --exclude=test_objectstore --exclude=test_auditor* --exclude=test_release* --exclude=test_throttler* --exclude=test_dirac*"
-
-nosetests -v --logging-filter=-sqlalchemy,-requests,-rucio.client.baseclient $noseopts
+python -bb -m pytest -vvvrxs
 if [ $? != 0 ]; then
     echo 'Tests on first VO failed, not attempting tests at second VO'
     exit 1
 fi
 
 echo 'Tests on first VO successful, preparing second VO'
-cp /opt/rucio/etc/rucio_multi_vo_ts2.cfg /opt/rucio/etc/rucio.cfg
+export RUCIO_HOME=/opt/rucio/etc/multi_vo/ts2
 
 echo 'Clearing memcache'
 echo flush_all > /dev/tcp/127.0.0.1/11211
 
-echo 'Bootstrap tests: Create jdoe account/mock scope'
+echo 'Bootstrapping tests'
 tools/bootstrap_tests.py
 if [ $? != 0 ]; then
     echo 'Failed to bootstrap!'
@@ -153,13 +139,6 @@ echo 'Sync metadata keys'
 tools/sync_meta.py
 if [ $? != 0 ]; then
     echo 'Failed to sync!'
-    exit 1
-fi
-
-echo 'Bootstrap tests: Create jdoe account/mock scope'
-tools/bootstrap_tests.py
-if [ $? != 0 ]; then
-    echo 'Failed to bootstrap!'
     exit 1
 fi
 
@@ -169,7 +148,8 @@ if test ${activate_rse}; then
 fi
 
 echo 'Running tests on VO "ts2"'
-nosetests -v --logging-filter=-sqlalchemy,-requests,-rucio.client.baseclient $noseopts
+python -bb -m pytest -vvvrxs
+
 if [ $? != 0 ]; then
     echo 'Tests on second VO failed'
     exit 1

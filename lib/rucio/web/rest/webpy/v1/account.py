@@ -1,5 +1,6 @@
-#!/usr/bin/env python
-# Copyright 2018 CERN for the benefit of the ATLAS collaboration.
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# Copyright 2012-2020 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,7 +15,7 @@
 # limitations under the License.
 #
 # Authors:
-# - Thomas Beermann <thomas.beermann@cern.ch>, 2012-2013
+# - Thomas Beermann <thomas.beermann@cern.ch>, 2012-2020
 # - Vincent Garonne <vincent.garonne@cern.ch>, 2012-2015
 # - Cedric Serfon <cedric.serfon@cern.ch>, 2014-2019
 # - Martin Barisits <martin.barisits@cern.ch>, 2014-2019
@@ -23,18 +24,17 @@
 # - Mario Lassnig <mario.lassnig@cern.ch>, 2018
 # - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2018-2019
 # - Andrew Lister <andrew.lister@stfc.ac.uk>, 2019
-#
-# PY3K COMPATIBLE
+# - Eric Vaandering <ewv@fnal.gov>, 2020
+# - Eli Chadwick <eli.chadwick@stfc.ac.uk>, 2020
+# - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020
 
 from __future__ import print_function
+
 from datetime import datetime
 from json import dumps, loads
 from logging import getLogger, StreamHandler, DEBUG
 from traceback import format_exc
-try:
-    from urlparse import parse_qsl
-except ImportError:
-    from urllib.parse import parse_qsl
+
 from web import application, ctx, data, header, BadRequest, Created, InternalError, OK, loadhook, redirect, seeother
 
 from rucio.api.account import add_account, del_account, get_account_info, list_accounts, list_identities, list_account_attributes, add_account_attribute, del_account_attribute, update_account, get_usage_history
@@ -43,8 +43,14 @@ from rucio.api.identity import add_account_identity, del_account_identity
 from rucio.api.rule import list_replication_rules
 from rucio.api.scope import add_scope, get_scopes
 from rucio.common.exception import AccountNotFound, Duplicate, AccessDenied, RucioException, RuleNotFound, RSENotFound, IdentityError, CounterNotFound
-from rucio.common.utils import generate_http_error, APIEncoder, render_json
+from rucio.common.utils import APIEncoder, render_json
 from rucio.web.rest.common import rucio_loadhook, RucioController, check_accept_header_wrapper
+from rucio.web.rest.utils import generate_http_error
+
+try:
+    from urlparse import parse_qsl
+except ImportError:
+    from urllib.parse import parse_qsl
 
 
 LOGGER = getLogger("rucio.account")
@@ -802,4 +808,5 @@ class GlobalUsage(RucioController):
 
 APP = application(URLS, globals())
 APP.add_processor(loadhook(rucio_loadhook))
-application = APP.wsgifunc()
+if __name__ != "rucio.web.rest.account":
+    application = APP.wsgifunc()

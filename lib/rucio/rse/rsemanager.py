@@ -1,4 +1,5 @@
-# Copyright 2012-2018 CERN for the benefit of the ATLAS collaboration.
+# -*- coding: utf-8 -*-
+# Copyright 2012-2021 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,22 +15,28 @@
 #
 # Authors:
 # - Ralph Vigne <ralph.vigne@cern.ch>, 2012-2015
-# - Vincent Garonne <vgaronne@gmail.com>, 2012-2018
-# - Mario Lassnig <mario.lassnig@cern.ch>, 2012-2018
-# - Cedric Serfon <cedric.serfon@cern.ch>, 2012-2017
+# - Vincent Garonne <vincent.garonne@cern.ch>, 2012-2018
+# - Mario Lassnig <mario.lassnig@cern.ch>, 2012-2020
+# - Cedric Serfon <cedric.serfon@cern.ch>, 2012-2020
 # - Yun-Pin Sun <winter0128@gmail.com>, 2013
-# - Wen Guan <wguan.icedew@gmail.com>, 2014-2017
-# - Martin Barisits <martin.barisits@cern.ch>, 2017-2019
-# - Tobias Wegner <twegner@cern.ch>, 2017-2018
+# - Wen Guan <wen.guan@cern.ch>, 2014-2017
+# - Martin Barisits <martin.barisits@cern.ch>, 2017-2020
+# - Tobias Wegner <twegner@cern.ch>, 2017-2019
 # - Brian Bockelman <bbockelm@cse.unl.edu>, 2018
 # - Frank Berghaus <frank.berghaus@cern.ch>, 2018-2019
-# - Joaquin Bogado <jbogado@linti.unlp.edu.ar>, 2018
+# - Joaquín Bogado <jbogado@linti.unlp.edu.ar>, 2018
 # - Nicolo Magini <nicolo.magini@cern.ch>, 2018
+# - Tomas Javurek <tomas.javurek@cern.ch>, 2018-2020
+# - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2018-2019
 # - James Perry <j.perry@epcc.ed.ac.uk>, 2019
-# - Gabriele Fronze' <gfronze@cern.ch>, 2019
 # - Andrew Lister <andrew.lister@stfc.ac.uk>, 2019
+# - Gabriele Fronze' <gfronze@cern.ch>, 2019
+# - Jaroslav Guenther <jaroslav.guenther@cern.ch>, 2019-2020
+# - Eli Chadwick <eli.chadwick@stfc.ac.uk>, 2020
 # - Dimitrios Christidis <dimitrios.christidis@cern.ch>, 2020
 # - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
+# - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020
+# - Thomas Beermann <thomas.beermann@cern.ch>, 2021
 #
 # PY3K COMPATIBLE
 
@@ -85,6 +92,7 @@ def get_rse_info(rse=None, vo='def', rse_id=None, session=None):
     # __request_rse_info will be assigned when the module is loaded as it depends on the rucio environment (server or client)
     # __request_rse_info, rse_region are defined in /rucio/rse/__init__.py
     key = '{}:{}'.format(rse, vo) if rse_id is None else str(rse_id)
+    key = 'rse_info_%s' % (key)
     rse_info = RSE_REGION.get(key)   # NOQA pylint: disable=undefined-variable
     if not rse_info:  # no cached entry found
         rse_info = __request_rse_info(str(rse), vo=vo, rse_id=rse_id, session=session)  # NOQA pylint: disable=undefined-variable
@@ -162,7 +170,7 @@ def select_protocol(rse_settings, operation, scheme=None, domain='wan'):
     return min(candidates, key=lambda k: k['domains'][domain][operation])
 
 
-def create_protocol(rse_settings, operation, scheme=None, domain='wan', auth_token=None, logger=None):
+def create_protocol(rse_settings, operation, scheme=None, domain='wan', auth_token=None, logger=_logger):
     """
     Instanciates the protocol defined for the given operation.
 
@@ -190,9 +198,9 @@ def create_protocol(rse_settings, operation, scheme=None, domain='wan', auth_tok
     for n in comp[1:]:
         try:
             mod = getattr(mod, n)
-        except AttributeError:
-            print('Protocol implementation not found')
-            raise  # TODO: provide proper rucio exception
+        except AttributeError as e:
+            logger.debug('Protocol implementations not supported.')
+            raise exception.RucioException(str(e))  # TODO: provide proper rucio exception
     protocol_attr['auth_token'] = auth_token
     protocol = mod(protocol_attr, rse_settings, logger=logger)
     return protocol
@@ -254,10 +262,11 @@ def exists(rse_settings, files, domain='wan', auth_token=None, logger=_logger):
 
         :raises RSENotConnected: no connection to a specific storage has been established
     """
+
     ret = {}
     gs = True  # gs represents the global status which inidcates if every operation workd in bulk mode
 
-    protocol = create_protocol(rse_settings, 'read', domain=domain, auth_token=auth_token)
+    protocol = create_protocol(rse_settings, 'read', domain=domain, auth_token=auth_token, logger=logger)
     protocol.connect()
     try:
         protocol.exists(None)
@@ -325,12 +334,13 @@ def upload(rse_settings, lfns, domain='wan', source_dir=None, force_pfn=None, fo
         :raises DestinationNotAccessible: remote destination directory is not accessible
         :raises ServiceUnavailable: for any other reason
     """
+
     ret = {}
     gs = True  # gs represents the global status which indicates if every operation worked in bulk mode
 
-    protocol = create_protocol(rse_settings, 'write', scheme=force_scheme, domain=domain, auth_token=auth_token)
+    protocol = create_protocol(rse_settings, 'write', scheme=force_scheme, domain=domain, auth_token=auth_token, logger=logger)
     protocol.connect()
-    protocol_delete = create_protocol(rse_settings, 'delete', domain=domain, auth_token=auth_token)
+    protocol_delete = create_protocol(rse_settings, 'delete', domain=domain, auth_token=auth_token, logger=logger)
     protocol_delete.connect()
 
     lfns = [lfns] if not type(lfns) is list else lfns
@@ -405,7 +415,6 @@ def upload(rse_settings, lfns, domain='wan', source_dir=None, force_pfn=None, fo
                         for checksum_name in GLOBALLY_SUPPORTED_CHECKSUMS:
                             if (checksum_name in stats) and (checksum_name in lfn):
                                 verified_checksums.append(stats[checksum_name] == lfn[checksum_name])
-
                         # Upload is successful if at least one checksum was found
                         valid = any(verified_checksums)
                         if not valid and ('filesize' in stats) and ('filesize' in lfn):
@@ -415,7 +424,7 @@ def upload(rse_settings, lfns, domain='wan', source_dir=None, force_pfn=None, fo
                             valid = True
                         else:
                             raise exception.RucioException('Checksum not validated')
-                    except exception.RSEChecksumUnavailable as e:
+                    except exception.RSEChecksumUnavailable:
                         if rse_settings['verify_checksum'] is False:
                             valid = True
                         else:
@@ -471,7 +480,7 @@ def upload(rse_settings, lfns, domain='wan', source_dir=None, force_pfn=None, fo
                             valid = True
                         else:
                             raise exception.RucioException('Checksum not validated')
-                    except exception.RSEChecksumUnavailable as e:
+                    except exception.RSEChecksumUnavailable:
                         if rse_settings['verify_checksum'] is False:
                             valid = True
                         else:
@@ -516,7 +525,7 @@ def delete(rse_settings, lfns, domain='wan', auth_token=None):
     ret = {}
     gs = True  # gs represents the global status which inidcates if every operation workd in bulk mode
 
-    protocol = create_protocol(rse_settings, 'delete', domain, auth_token=auth_token)
+    protocol = create_protocol(rse_settings, 'delete', domain=domain, auth_token=auth_token)
     protocol.connect()
 
     lfns = [lfns] if not type(lfns) is list else lfns
@@ -566,7 +575,7 @@ def rename(rse_settings, files, domain='wan', auth_token=None):
     ret = {}
     gs = True  # gs represents the global status which inidcates if every operation workd in bulk mode
 
-    protocol = create_protocol(rse_settings, 'write', domain, auth_token=auth_token)
+    protocol = create_protocol(rse_settings, 'write', domain=domain, auth_token=auth_token)
     protocol.connect()
 
     files = [files] if not type(files) is list else files
@@ -673,7 +682,8 @@ def find_matching_scheme(rse_settings_dest, rse_settings_src, operation_src, ope
             if protocol['scheme'] not in scheme:
                 tbr.append(protocol)
                 continue
-        if protocol['domains'].get(domain, {}).get(operation_src, 1) == 0:
+        prot = protocol['domains'].get(domain, {}).get(operation_src, 1)
+        if prot is None or prot == 0:
             tbr.append(protocol)
     for r in tbr:
         src_candidates.remove(r)
@@ -688,7 +698,8 @@ def find_matching_scheme(rse_settings_dest, rse_settings_src, operation_src, ope
             if protocol['scheme'] not in scheme:
                 tbr.append(protocol)
                 continue
-        if protocol['domains'].get(domain, {}).get(operation_dest, 1) == 0:
+        prot = protocol['domains'].get(domain, {}).get(operation_dest, 1)
+        if prot is None or prot == 0:
             tbr.append(protocol)
     for r in tbr:
         dest_candidates.remove(r)
@@ -728,9 +739,9 @@ def _retry_protocol_stat(protocol, pfn):
         except exception.RSEChecksumUnavailable as e:
             # The stat succeeded here, but the checksum failed
             raise e
-        except NotImplementedError as e:
+        except NotImplementedError:
             break
-        except Exception as e:
+        except Exception:
             sleep(2**attempt)
     return protocol.stat(pfn)
 

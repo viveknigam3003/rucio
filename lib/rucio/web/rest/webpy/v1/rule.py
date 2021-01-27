@@ -1,5 +1,6 @@
-#!/usr/bin/env python
-# Copyright 2012-2018 CERN for the benefit of the ATLAS collaboration.
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# Copyright 2012-2020 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,24 +17,22 @@
 # Authors:
 # - Vincent Garonne <vgaronne@gmail.com>, 2012-2017
 # - Mario Lassnig <mario.lassnig@cern.ch>, 2013-2018
-# - Thomas Beermann <thomas.beermann@cern.ch>, 2013-2018
+# - Thomas Beermann <thomas.beermann@cern.ch>, 2013-2020
 # - Martin Barisits <martin.barisits@cern.ch>, 2013-2017
 # - Cedric Serfon <cedric.serfon@cern.ch>, 2014-2017
 # - Joaquin Bogado <jbogado@linti.unlp.edu.ar>, 2018
 # - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2018-2019
 # - Andrew Lister <andrew.lister@stfc.ac.uk>, 2019
 # - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
-#
-# PY3K COMPATIBLE
+# - James Perry <j.perry@epcc.ed.ac.uk>, 2020
+# - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020
 
 from __future__ import print_function
-from logging import getLogger, StreamHandler, DEBUG
+
 from json import dumps, loads
+from logging import getLogger, StreamHandler, DEBUG
 from traceback import format_exc
-try:
-    from urlparse import parse_qsl
-except ImportError:
-    from urllib.parse import parse_qsl
+
 from web import application, ctx, data, header, Created, InternalError, OK, loadhook
 
 from rucio.api.lock import get_replica_locks_for_rule_id
@@ -45,23 +44,29 @@ from rucio.common.exception import (InsufficientAccountLimit, RuleNotFound, Acce
                                     ReplicationRuleCreationTemporaryFailed, InvalidRuleWeight, StagingAreaRuleRequiresLifetime,
                                     DuplicateRule, InvalidObject, AccountNotFound, RuleReplaceFailed, ScratchDiskLifetimeConflict,
                                     ManualRuleApprovalBlocked, UnsupportedOperation)
-from rucio.common.schema import get_schema_value
-from rucio.common.utils import generate_http_error, render_json, APIEncoder
+from rucio.common.schema import insert_scope_name
+from rucio.common.utils import render_json, APIEncoder
 from rucio.web.rest.common import rucio_loadhook, check_accept_header_wrapper
+from rucio.web.rest.utils import generate_http_error
+
+try:
+    from urlparse import parse_qsl
+except ImportError:
+    from urllib.parse import parse_qsl
 
 LOGGER = getLogger("rucio.rule")
 SH = StreamHandler()
 SH.setLevel(DEBUG)
 LOGGER.addHandler(SH)
 
-URLS = ('/(.+)/locks', 'ReplicaLocks',
-        '/(.+)/reduce', 'ReduceRule',
-        '/(.+)/move', 'MoveRule',
-        '%s/history' % get_schema_value('SCOPE_NAME_REGEXP'), 'RuleHistoryFull',
-        '/(.+)/history', 'RuleHistory',
-        '/(.+)/analysis', 'RuleAnalysis',
-        '/', 'AllRule',
-        '/(.+)', 'Rule',)
+URLS = insert_scope_name(('/(.+)/locks', 'ReplicaLocks',
+                          '/(.+)/reduce', 'ReduceRule',
+                          '/(.+)/move', 'MoveRule',
+                          '%s/history', 'RuleHistoryFull',
+                          '/(.+)/history', 'RuleHistory',
+                          '/(.+)/analysis', 'RuleAnalysis',
+                          '/', 'AllRule',
+                          '/(.+)', 'Rule',))
 
 
 class Rule:
@@ -535,4 +540,5 @@ class RuleAnalysis:
 
 APP = application(URLS, globals())
 APP.add_processor(loadhook(rucio_loadhook))
-application = APP.wsgifunc()
+if __name__ != "rucio.web.rest.rule":
+    application = APP.wsgifunc()

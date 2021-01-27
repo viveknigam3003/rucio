@@ -1,4 +1,5 @@
-# Copyright 2012-2020 CERN for the benefit of the ATLAS collaboration.
+# -*- coding: utf-8 -*-
+# Copyright 2012-2020 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,16 +14,16 @@
 # limitations under the License.
 #
 # Authors:
-# - Vincent Garonne, <vincent.garonne@cern.ch>, 2012-2015
-# - Mario Lassnig, <mario.lassnig@cern.ch>, 2013
-# - Hannes Hansen, <hannes.jakob.hansen@cern.ch>, 2018
+# - Vincent Garonne <vincent.garonne@cern.ch>, 2012-2015
+# - Mario Lassnig <mario.lassnig@cern.ch>, 2013-2020
+# - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2018
 # - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
 # - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020
-#
-# PY3K COMPATIBLE
+# - Martin Barisits <martin.barisits@cern.ch>, 2020
 
 from __future__ import print_function
 from re import match
+from six import string_types
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.exc import NoResultFound
@@ -53,7 +54,11 @@ def add_key(key, key_type, value_type=None, value_regexp=None, session=None):
         raise UnsupportedValueType('The type \'%(value_type)s\' is not supported for values!' % locals())
 
     # Convert key_type
-    key_type = str(key_type)
+    if isinstance(key_type, string_types):
+        key_type = str(key_type)
+    else:
+        key_type = str(key_type.value)
+
     if key_type == 'F':
         key_type = 'FILE'
     elif key_type == 'D':
@@ -62,8 +67,8 @@ def add_key(key, key_type, value_type=None, value_regexp=None, session=None):
         key_type = 'CONTAINER'
 
     try:
-        key_type = KeyType.from_string(key_type)
-    except ValueError as error:
+        key_type = KeyType(key_type)
+    except ValueError:
         raise UnsupportedKeyType('The type \'%s\' is not supported for keys!' % str(key_type))
 
     new_key = models.DIDKey(key=key, value_type=value_type and str(value_type), value_regexp=value_regexp, key_type=key_type)

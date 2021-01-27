@@ -1,4 +1,5 @@
-# Copyright 2013-2018 CERN for the benefit of the ATLAS collaboration.
+# -*- coding: utf-8 -*-
+# Copyright 2018-2020 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,20 +14,17 @@
 # limitations under the License.
 #
 # Authors:
-# - Cedric Serfon <cedric.serfon@cern.ch>, 2013-2020
-# - Vincent Garonne <vgaronne@gmail.com>, 2014-2018
-# - David Cameron <d.g.cameron@gmail.com>, 2014
-# - Mario Lassnig <mario.lassnig@cern.ch>, 2015
-# - Wen Guan <wguan.icedew@gmail.com>, 2015
-# - Martin Barisits <martin.barisits@cern.ch>, 2016-2017
+# - Mario Lassnig <mario.lassnig@cern.ch>, 2018-2020
 # - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2018
+# - Robert Illingworth <illingwo@fnal.gov>, 2019
 # - Andrew Lister <andrew.lister@stfc.ac.uk>, 2019
-# - Brandon White <bjwhite@fnal.gov>, 2019-2020
+# - Brandon White <bjwhite@fnal.gov>, 2019
+# - Cedric Serfon <cedric.serfon@cern.ch>, 2020
 # - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
-# - Eli Chadwick <eli.chadwick@stfc.ac.uk>, 2020
 # - Thomas Beermann <thomas.beermann@cern.ch>, 2020
-#
-# PY3K COMPATIBLE
+# - Eli Chadwick <eli.chadwick@stfc.ac.uk>, 2020
+# - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020
+# - Eric Vaandering <ewv@fnal.gov>, 2020
 
 import logging
 import os
@@ -34,20 +32,19 @@ import re
 import socket
 import threading
 import time
-
 from datetime import datetime
 from json import loads
 from math import exp
 from sys import exc_info, stdout
 from traceback import format_exception
 
-
-from rucio.db.sqla.constants import DIDType, SubscriptionState
-from rucio.common.exception import (DatabaseException, DataIdentifierNotFound, InvalidReplicationRule, DuplicateRule, RSEBlacklisted,
-                                    InvalidRSEExpression, InsufficientTargetRSEs, InsufficientAccountLimit, InputValidationError, RSEOverQuota,
-                                    ReplicationRuleCreationTemporaryFailed, InvalidRuleWeight, StagingAreaRuleRequiresLifetime,
-                                    SubscriptionWrongParameter, SubscriptionNotFound)
+import rucio.db.sqla.util
 from rucio.common.config import config_get
+from rucio.common.exception import (DatabaseException, DataIdentifierNotFound, InvalidReplicationRule, DuplicateRule,
+                                    RSEBlacklisted, RSEWriteBlocked, InvalidRSEExpression, InsufficientTargetRSEs,
+                                    InsufficientAccountLimit, InputValidationError, RSEOverQuota,
+                                    ReplicationRuleCreationTemporaryFailed, InvalidRuleWeight,
+                                    StagingAreaRuleRequiresLifetime, SubscriptionWrongParameter, SubscriptionNotFound)
 from rucio.common.schema import validate_schema
 from rucio.common.utils import chunks
 from rucio.core import monitor, heartbeat
@@ -57,7 +54,7 @@ from rucio.core.rse_expression_parser import parse_expression
 from rucio.core.rse_selector import RSESelector
 from rucio.core.rule import add_rule, list_rules, get_rule
 from rucio.core.subscription import list_subscriptions, update_subscription
-
+from rucio.db.sqla.constants import DIDType, SubscriptionState
 
 logging.basicConfig(stream=stdout,
                     level=getattr(logging,
@@ -300,12 +297,14 @@ def transmogrifier(bulk=5, once=False, sleep_time=60):
                                         purge_replicas = False
                                     rse_expression = str(rule_dict['rse_expression'])
                                     comment = str(subscription['comments'])
+                                    if 'comments' in rule_dict:
+                                        comment = str(rule_dict['comments'])
                                     subscription_id = str(subscription['id'])
                                     account = subscription['account']
                                     copies = int(rule_dict['copies'])
                                     activity = rule_dict.get('activity', 'User Subscriptions')
                                     try:
-                                        validate_schema(name='activity', obj=activity)
+                                        validate_schema(name='activity', obj=activity, vo=account.vo)
                                     except InputValidationError as error:
                                         logging.error(prepend_str + 'Error validating the activity %s' % (str(error)))
                                         activity = 'User Subscriptions'
@@ -402,11 +401,13 @@ def transmogrifier(bulk=5, once=False, sleep_time=60):
                                             logging.error(prepend_str + '%s' % (str(error)))
                                             monitor.record_counter(counters='transmogrifier.addnewrule.errortype.%s' % (str(error.__class__.__name__)), delta=1)
                                             break
-                                        except (ReplicationRuleCreationTemporaryFailed, InsufficientTargetRSEs, InsufficientAccountLimit, DatabaseException, RSEBlacklisted) as error:
+                                        except (ReplicationRuleCreationTemporaryFailed, InsufficientTargetRSEs,
+                                                InsufficientAccountLimit, DatabaseException, RSEBlacklisted,
+                                                RSEWriteBlocked) as error:
                                             # Errors to be retried
                                             logging.error(prepend_str + '%s Will perform an other attempt %i/%i' % (str(error), attempt + 1, nattempt))
                                             monitor.record_counter(counters='transmogrifier.addnewrule.errortype.%s' % (str(error.__class__.__name__)), delta=1)
-                                        except Exception as error:
+                                        except Exception:
                                             # Unexpected errors
                                             monitor.record_counter(counters='transmogrifier.addnewrule.errortype.unknown', delta=1)
                                             exc_type, exc_value, exc_traceback = exc_info()
@@ -428,7 +429,7 @@ def transmogrifier(bulk=5, once=False, sleep_time=60):
                     elif did['did_type'] == str(DIDType.CONTAINER):
                         monitor.record_counter(counters='transmogrifier.did.container.processed', delta=1)
                     monitor.record_counter(counters='transmogrifier.did.processed', delta=1)
-                    identifiers.append({'scope': did['scope'], 'name': did['name'], 'did_type': DIDType.from_sym(did['did_type'])})
+                    identifiers.append({'scope': did['scope'], 'name': did['name'], 'did_type': did['did_type']})
 
             time1 = time.time()
 
@@ -463,6 +464,8 @@ def run(threads=1, bulk=100, once=False, sleep_time=60):
     """
     Starts up the transmogrifier threads.
     """
+    if rucio.db.sqla.util.is_old_db():
+        raise DatabaseException('Database was not updated, daemon won\'t start')
 
     if once:
         logging.info('Will run only one iteration in a single threaded mode')

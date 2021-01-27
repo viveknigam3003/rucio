@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright 2017-2019 CERN for the benefit of the ATLAS collaboration.
+# Copyright 2017-2020 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,11 +15,15 @@
 #
 # Authors:
 # - Thomas Beermann <thomas.beermann@cern.ch>, 2017-2018
-# - Vincent Garonne <vgaronne@gmail.com>, 2018
+# - Vincent Garonne <vincent.garonne@cern.ch>, 2018
 # - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2018-2019
-# - Mario Lassnig <mario.lassnig@cern.ch>, 2019
-# - Cedric Serfon <cedric.serfon@cern.ch>, 2020
+# - Mario Lassnig <mario.lassnig@cern.ch>, 2019-2020
+# - Martin Barisits <martin.barisits@cern.ch>, 2019
+# - Andrew Lister <andrew.lister@stfc.ac.uk>, 2019
 # - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
+# - Cedric Serfon <cedric.serfon@cern.ch>, 2020
+# - Eli Chadwick <eli.chadwick@stfc.ac.uk>, 2020
+# - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020
 
 memcached -u root -d
 
@@ -27,20 +31,24 @@ function usage {
   echo "Usage: $0 [OPTION]..."
   echo 'Run Rucio test suite'
   echo ''
-  echo '  -h    Show usage.'
-  echo '  -i    Do only the initialization.'
+  echo '  -h    Show usage'
+  echo '  -i    Do only the initialization'
   echo '  -r    Activate default RSEs (XRD1, XRD2, XRD3)'
   echo '  -s    Run special tests for Dirac. Includes using BelleII schema'
+  echo '  -t    Verbose output from pytest'
+  echo '  -a    Skip alembic downgrade/upgrade test'
   exit
 }
 
-while getopts hirs opt
+while getopts hirsta opt
 do
   case "$opt" in
     h) usage;;
     i) init_only="true";;
     r) activate_rse="true";;
     s) special="true";;
+    t) notrace="true";;
+    a) noalembic="true";;
   esac
 done
 export RUCIO_HOME=/opt/etc/test
@@ -69,7 +77,7 @@ if test ${special}; then
     ln -s /opt/rucio/etc/rucio.cfg.special /opt/rucio/etc/rucio.cfg
 else
     if [ -f /opt/rucio/etc/rucio.cfg ]; then
-        echo 'Using the standard conig'
+        echo 'Using the standard config'
     else
         echo 'rucio.cfg not found. Will try to do a symlink'
         ln -s /opt/rucio/etc/rucio.cfg.default /opt/rucio/etc/rucio.cfg
@@ -88,19 +96,18 @@ if [ -f /tmp/rucio.db ]; then
     chmod 777 /tmp/rucio.db
 fi
 
-echo 'Running full alembic migration'
-alembic -c /opt/rucio/etc/alembic.ini downgrade base
-if [ $? != 0 ]; then
-    echo 'Failed to downgrade the database!'
-    exit 1
-fi
-alembic -c /opt/rucio/etc/alembic.ini upgrade head
-if [ $? != 0 ]; then
-    echo 'Failed to upgrade the database!'
-    exit 1
+if test ${noalembic}; then
+    echo "Skipping alembic migration"
+else
+    echo "Running full alembic migration"
+    ALEMBIC_CONFIG="/opt/rucio/etc/alembic.ini" tools/alembic_migration.sh
+    if [ $? != 0 ]; then
+	echo 'Failed to run alembic migration!'
+	exit 1
+    fi
 fi
 
-echo 'Bootstrap tests: Create jdoe account/mock scope'
+echo 'Bootstrapping tests'
 tools/bootstrap_tests.py
 if [ $? != 0 ]; then
     echo 'Failed to bootstrap!'
@@ -108,7 +115,7 @@ if [ $? != 0 ]; then
 fi
 
 echo 'Sync rse_repository'
-if test ${special};then
+if test ${special}; then
     tools/sync_rses.py etc/rse_repository.json.special
     if [ $? != 0 ]; then
         echo 'Failed to sync!'
@@ -129,30 +136,26 @@ if [ $? != 0 ]; then
     exit 1
 fi
 
-echo 'Bootstrap tests: Create jdoe account/mock scope'
-tools/bootstrap_tests.py
-if [ $? != 0 ]; then
-    echo 'Failed to bootstrap!'
-    exit 1
-fi
-
 if test ${activate_rse}; then
     echo 'Activating default RSEs (XRD1, XRD2, XRD3)'
     tools/docker_activate_rses.sh
 fi
-
 
 if test ${init_only}; then
     exit
 fi
 
 if test ${special}; then
-    echo 'Using the special config'
-    nosetests -v --logging-filter=-sqlalchemy,-requests,-rucio.client.baseclient lib/rucio/tests/test_dirac.py
+    echo 'Using the special config and only running test_dirac'
+    python -bb -m pytest -vvvrxs lib/rucio/tests/test_dirac.py
 else
-    echo 'Running tests'
-    noseopts="--exclude=test_alembic --exclude=.*test_rse_protocol_.* --exclude=test_rucio_server --exclude=test_objectstore --exclude=test_auditor* --exclude=test_release* --exclude=test_throttler --exclude=test_dirac --exclude=test_multi_vo"
-    nosetests -v --logging-filter=-sqlalchemy,-requests,-rucio.client.baseclient $noseopts
+    if test ${trace}; then
+	echo 'Running tests in verbose mode'
+	python -bb -m pytest -vvvrxs
+    else
+	echo 'Running tests'
+	python -bb -m pytest -v --tb=short
+    fi
 fi
 
 exit $?

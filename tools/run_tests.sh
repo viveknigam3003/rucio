@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright 2013-2019 CERN for the benefit of the ATLAS collaboration.
+# Copyright 2012-2020 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,14 +14,17 @@
 # limitations under the License.
 #
 # Authors:
-# - Vincent Garonne <vincent.garonne@cern.ch>, 2012-2013
-# - Mario Lassnig <mario.lassnig@cern.ch>, 2013-2019
-# - Martin Barisits <martin.barisits@cern.ch>, 2013-2014
+# - Mario Lassnig <mario.lassnig@cern.ch>, 2012-2019
+# - Vincent Garonne <vincent.garonne@cern.ch>, 2012-2015
+# - Ralph Vigne <ralph.vigne@cern.ch>, 2013
+# - Martin Barisits <martin.barisits@cern.ch>, 2013-2016
+# - Joaquín Bogado <jbogado@linti.unlp.edu.ar>, 2014
 # - Evangelia Liotiri <evangelia.liotiri@cern.ch>, 2015
-# - Tobias Wegner <tobias.wegner@cern.ch>, 2017
+# - Tobias Wegner <twegner@cern.ch>, 2017
 # - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2018
-
-noseopts="--exclude=test_dq2* --exclude=.*test_rse_protocol_.* --exclude=test_alembic --exclude=test_rucio_cache --exclude=test_rucio_server"
+# - Dimitrios Christidis <dimitrios.christidis@cern.ch>, 2019
+# - James Perry <j.perry@epcc.ed.ac.uk>, 2019
+# - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020
 
 function usage {
   echo "Usage: $0 [OPTION]..."
@@ -30,8 +33,7 @@ function usage {
   echo ''
   echo '  -h    Show usage'
   echo '  -2    Run tests twice'
-  echo '  -r    Do not skip RSE tests'
-  echo '  -c    Include only named class'
+  echo '  -c    Add pytest options'
   echo '  -i    Do only the initialization'
   echo '  -p    Also run pylint tests'
   echo '  -k    Keep database from previous test'
@@ -49,14 +51,13 @@ do
     case "$opt" in
 	h) usage;;
 	2) iterations=2;;
-	r) noseopts="";;
-	c) noseopts="$OPTARG";;
+	c) pytestextra="$OPTARG";;
 	i) init_only="true";;
 	p) pylint="true";;
 	k) keep_db="true";;
 	a) alembic="";;
 	u) pip_only="true";;
-	x) stop_on_failure="--stop";;
+	x) stop_on_failure="--exitfirst";;
     esac
 done
 
@@ -116,15 +117,10 @@ fi
 
 if test ${alembic}; then
     echo 'Running full alembic migration'
-    alembic downgrade base
+    tools/alembic_migration.sh
     if [ $? != 0 ]; then
-        echo 'Failed to downgrade the database!'
-        exit
-    fi
-    alembic upgrade head
-    if [ $? != 0 ]; then
-        echo 'Failed to upgrade the database!'
-        exit
+        echo 'Failed to run alembic migration!'
+        exit 1
     fi
 fi
 
@@ -144,6 +140,7 @@ fi
 for i in $iterations
 do
     echo 'Running test iteration' $i
-    echo nosetests -v --logging-filter=-sqlalchemy,-requests,-rucio.client.baseclient $noseopts $stop_on_failure
-    nosetests -v --logging-filter=-sqlalchemy,-requests,-rucio.client.baseclient $noseopts $stop_on_failure
+        echo python -bb -m pytest -vvvrxs $stop_on_failure $pytestextra
+        python -bb -m pytest -vvvrxs $stop_on_failure $pytestextra
+    fi
 done

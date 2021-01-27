@@ -1,19 +1,25 @@
-# Copyright European Organization for Nuclear Research (CERN)
+# -*- coding: utf-8 -*-
+# Copyright 2012-2020 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
-# You may not use this file except in compliance with the License.
+# you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# http://www.apache.org/licenses/LICENSE-2.0
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 #
 # Authors:
-# - Vincent Garonne, <vincent.garonne@cern.ch>, 2012-2013
-# - Mario Lassnig, <mario.lassnig@cern.ch>, 2013
+# - Vincent Garonne <vincent.garonne@cern.ch>, 2012-2014
+# - Mario Lassnig <mario.lassnig@cern.ch>, 2013-2017
+# - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020
+# - Martin Barisits <martin.barisits@cern.ch>, 2020
 
-"""
-Test the metadata DID client
-"""
-
-from nose.tools import assert_equal, assert_in
+import unittest
 
 from rucio.client.didclient import DIDClient
 from rucio.client.metaclient import MetaClient
@@ -22,12 +28,12 @@ from rucio.client.scopeclient import ScopeClient
 from rucio.common.utils import generate_uuid as uuid
 
 
-class TestMetaDIDClient(object):
+class TestMetaDIDClient(unittest.TestCase):
     """
     Test the metadata DID client
     """
 
-    def setup(self):
+    def setUp(self):
         """ Setup the Test Case """
         self.did_client = DIDClient()
         self.meta_client = MetaClient()
@@ -50,5 +56,17 @@ class TestMetaDIDClient(object):
         self.did_client.set_metadata(scope=tmp_scope, name=tmp_dataset, key=key, value=value)
 
         meta = self.did_client.get_metadata(scope=tmp_scope, name=tmp_dataset)
-        assert_in(key, meta)
-        assert_equal(meta[key], value)
+        assert key in meta
+        assert meta[key] == value
+
+    def test_set_is_new_meta(self):
+        """ META DID (CLIENTS):  Try to set is_new metadata"""
+        # Add a scope
+        tmp_scope = 'mock'
+
+        # Add a dataset
+        tmp_dataset = 'dsn_%s' % uuid()
+
+        self.did_client.add_dataset(scope=tmp_scope, name=tmp_dataset)
+
+        self.did_client.set_metadata(scope=tmp_scope, name=tmp_dataset, key='is_new', value=True)

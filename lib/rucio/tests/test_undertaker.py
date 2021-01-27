@@ -1,4 +1,5 @@
-# Copyright 2013-2018 CERN for the benefit of the ATLAS collaboration.
+# -*- coding: utf-8 -*-
+# Copyright 2013-2021 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,19 +14,20 @@
 # limitations under the License.
 #
 # Authors:
-# - Vincent Garonne <vgaronne@gmail.com>, 2013-2018
+# - Vincent Garonne <vincent.garonne@cern.ch>, 2013-2018
 # - Martin Barisits <martin.barisits@cern.ch>, 2015-2017
-# - Joaquin Bogado <jbogado@linti.unlp.edu.ar>, 2018
+# - Joaquín Bogado <jbogado@linti.unlp.edu.ar>, 2018
 # - Mario Lassnig <mario.lassnig@cern.ch>, 2018
 # - Andrew Lister <andrew.lister@stfc.ac.uk>, 2019
 # - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2019
+# - Aristeidis Fkiaras <aristeidis.fkiaras@cern.ch>, 2020
 # - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
 # - Eli Chadwick <eli.chadwick@stfc.ac.uk>, 2020
+# - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020-2021
 
+import unittest
 from datetime import datetime, timedelta
 from logging import getLogger
-
-from nose.tools import assert_not_equal
 
 from rucio.common.config import config_get, config_get_bool
 from rucio.common.policy import get_policy
@@ -34,18 +36,18 @@ from rucio.common.utils import generate_uuid
 from rucio.core.account_limit import set_local_account_limit
 from rucio.core.did import add_dids, attach_dids, list_expired_dids, get_did, set_metadata
 from rucio.core.replica import get_replica
-from rucio.core.rule import add_rules, list_rules
 from rucio.core.rse import get_rse_id, add_rse
+from rucio.core.rule import add_rules, list_rules
 from rucio.daemons.undertaker.undertaker import undertaker
+from rucio.db.sqla.util import json_implemented
 from rucio.tests.common import rse_name_generator
-
 
 LOG = getLogger(__name__)
 
 
-class TestUndertaker:
+class TestUndertaker(unittest.TestCase):
 
-    def setup(self):
+    def setUp(self):
         if config_get_bool('common', 'multi_vo', raise_exception=False, default=False):
             self.vo = {'vo': config_get('client', 'vo', raise_exception=False, default='tst')}
         else:
@@ -79,12 +81,10 @@ class TestUndertaker:
 
         add_dids(dids=dsns1 + dsns2, account=root)
 
-        # Add generic metadata on did
-        try:
+        # arbitrary keys do not work without JSON support (sqlite, Oracle < 12)
+        if json_implemented():
+            # Add generic metadata on did
             set_metadata(tmp_scope, dsns1[0]['name'], "test_key", "test_value")
-        except NotImplementedError:
-            # add_did_meta is not Implemented for Oracle < 12
-            pass
 
         replicas = list()
         for dsn in dsns1 + dsns2:
@@ -100,7 +100,7 @@ class TestUndertaker:
         undertaker(worker_number=1, total_workers=1, once=True)
 
         for replica in replicas:
-            assert_not_equal(get_replica(scope=replica['scope'], name=replica['name'], rse_id=rse_id)['tombstone'], None)
+            assert get_replica(scope=replica['scope'], name=replica['name'], rse_id=rse_id)['tombstone'] is not None
 
     def test_list_expired_dids_with_locked_rules(self):
         """ UNDERTAKER (CORE): Test that the undertaker does not list expired dids with locked rules"""

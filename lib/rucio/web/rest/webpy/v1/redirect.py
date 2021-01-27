@@ -1,5 +1,6 @@
-#!/usr/bin/env python
-# Copyright 2012-2018 CERN for the benefit of the ATLAS collaboration.
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# Copyright 2014-2020 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,28 +18,32 @@
 # - Vincent Garonne <vincent.garonne@cern.ch>, 2014-2017
 # - Cedric Serfon <cedric.serfon@cern.ch>, 2014-2019
 # - Mario Lassnig <mario.lassnig@cern.ch>, 2014-2018
+# - Thomas Beermann <thomas.beermann@cern.ch>, 2018
 # - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2018-2019
+# - James Perry <j.perry@epcc.ed.ac.uk>, 2019-2020
 # - Andrew Lister <andrew.lister@stfc.ac.uk>, 2019
 # - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
-#
-# PY3K COMPATIBLE
+# - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020
+# - Martin Barisits <martin.barisits@cern.ch>, 2020
 
 from __future__ import print_function
+
+from logging import getLogger, StreamHandler, DEBUG
 from traceback import format_exc
+
+from web import application, ctx, header, seeother, InternalError
+
+from rucio.api.replica import list_replicas
+from rucio.common.exception import RucioException, DataIdentifierNotFound, ReplicaNotFound
+from rucio.common.schema import insert_scope_name
+from rucio.core.replica_sorter import site_selector, sort_replicas
+from rucio.web.rest.common import RucioController, check_accept_header_wrapper
+from rucio.web.rest.utils import generate_http_error
+
 try:
     from urlparse import parse_qs
 except ImportError:
     from urllib.parse import parse_qs
-from web import application, ctx, header, seeother, InternalError
-
-from logging import getLogger, StreamHandler, DEBUG
-
-from rucio.api.replica import list_replicas
-from rucio.common.exception import RucioException, DataIdentifierNotFound, ReplicaNotFound
-from rucio.common.replica_sorter import sort_random, sort_geoip, sort_closeness, sort_ranking, sort_dynamic, site_selector
-from rucio.common.schema import get_schema_value
-from rucio.common.utils import generate_http_error
-from rucio.web.rest.common import RucioController, check_accept_header_wrapper
 
 
 LOGGER = getLogger("rucio.rucio")
@@ -46,8 +51,8 @@ SH = StreamHandler()
 SH.setLevel(DEBUG)
 LOGGER.addHandler(SH)
 
-URLS = ('%s/metalink?$' % get_schema_value('SCOPE_NAME_REGEXP'), 'MetaLinkRedirector',
-        '%s/?$' % get_schema_value('SCOPE_NAME_REGEXP'), 'HeaderRedirector')
+URLS = insert_scope_name(('%s/metalink?$', 'MetaLinkRedirector',
+                          '%s/?$', 'HeaderRedirector'))
 
 
 class MetaLinkRedirector(RucioController):
@@ -138,17 +143,7 @@ class MetaLinkRedirector(RucioController):
                 yield '  <glfn name="/atlas/rucio/%s:%s">' % (rfile['scope'], rfile['name'])
                 yield '</glfn>\n'
 
-                # sort the actual replicas if necessary
-                if select == 'geoip':
-                    replicas = sort_geoip(dictreplica, client_location['ip'], ignore_error=True)
-                elif select == 'closeness':
-                    replicas = sort_closeness(dictreplica, client_location)
-                elif select == 'dynamic':
-                    replicas = sort_dynamic(dictreplica, client_location)
-                elif select == 'ranking':
-                    replicas = sort_ranking(dictreplica, client_location)
-                else:
-                    replicas = sort_random(dictreplica)
+                replicas = sort_replicas(dictreplica, client_location, selection=select)
 
                 # stream URLs
                 idx = 1
@@ -273,17 +268,7 @@ class HeaderRedirector(RucioController):
                             else:
                                 raise ReplicaNotFound('no redirection possible - no valid RSE for HTTP redirection found')
                         else:
-                            if select == 'geoip':
-                                rep = sort_geoip(dictreplica, client_location['ip'])
-                            elif select == 'closeness':
-                                rep = sort_closeness(dictreplica, client_location)
-                            elif select == 'dynamic':
-                                rep = sort_dynamic(dictreplica, client_location)
-                            elif select == 'ranking':
-                                rep = sort_ranking(dictreplica, client_location)
-                            else:
-                                rep = sort_random(dictreplica)
-
+                            rep = sort_replicas(dictreplica, client_location, selection=select)
                             selected_url = rep[0]
 
             if selected_url:

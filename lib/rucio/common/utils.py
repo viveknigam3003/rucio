@@ -1,4 +1,5 @@
-# Copyright 2012-2019 CERN for the benefit of the ATLAS collaboration.
+# -*- coding: utf-8 -*-
+# Copyright 2012-2021 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,51 +14,64 @@
 # limitations under the License.
 #
 # Authors:
-# - Vincent Garonne <vgaronne@gmail.com>, 2012-2018
+# - Vincent Garonne <vincent.garonne@cern.ch>, 2012-2018
 # - Thomas Beermann <thomas.beermann@cern.ch>, 2012-2018
-# - Mario Lassnig <mario.lassnig@cern.ch>, 2012-2019
-# - Cedric Serfon <cedric.serfon@cern.ch>, 2013-2020
+# - Mario Lassnig <mario.lassnig@cern.ch>, 2012-2020
+# - Cedric Serfon <cedric.serfon@cern.ch>, 2013-2021
 # - Ralph Vigne <ralph.vigne@cern.ch>, 2013
-# - Joaquin Bogado <jbogado@linti.unlp.edu.ar>, 2015-2018
-# - Martin Barisits <martin.barisits@cern.ch>, 2016-2019
-# - Frank Berghaus, <frank.berghaus@cern.ch>, 2017
+# - Joaquín Bogado <jbogado@linti.unlp.edu.ar>, 2015-2018
+# - Martin Barisits <martin.barisits@cern.ch>, 2016-2020
 # - Brian Bockelman <bbockelm@cse.unl.edu>, 2018
-# - Tobias Wegner <twegner@cern.ch>, 2018
+# - Tobias Wegner <twegner@cern.ch>, 2018-2019
 # - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2018-2019
-# - Andrew Lister, <andrew.lister@stfc.ac.uk>, 2019
+# - Tomas Javurek <tomas.javurek@cern.ch>, 2019-2020
+# - Andrew Lister <andrew.lister@stfc.ac.uk>, 2019
+# - James Perry <j.perry@epcc.ed.ac.uk>, 2019
 # - Gabriele Fronze' <gfronze@cern.ch>, 2019
-# - Jaroslav Guenther <jaroslav.guenther@gmail.com>, 2019
+# - Jaroslav Guenther <jaroslav.guenther@cern.ch>, 2019-2020
+# - Eli Chadwick <eli.chadwick@stfc.ac.uk>, 2020
 # - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
-#
-# PY3K COMPATIBLE
-
+# - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020-2021
 
 from __future__ import print_function
+
+try:
+    import importlib
+    importlib.util.find_spec('')
+except AttributeError:
+    import imp
 
 import base64
 import copy
 import datetime
 import errno
+import functools
 import getpass
 import hashlib
-import imp
 import json
+import logging
 import os
 import os.path
 import re
-import requests
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 import zlib
-
-from logging import getLogger, Formatter
+from enum import Enum
+from logging import getLogger, Formatter  # NOQA: F401
 from logging.handlers import RotatingFileHandler
 from uuid import uuid4 as uuid
-from six import string_types, text_type, PY3
 from xml.etree import ElementTree
+
+import requests
+from six import string_types, text_type, PY3
+
+from rucio.common.config import config_get
+from rucio.common.exception import MissingModuleException, InvalidType, InputValidationError, MetalinkJsonParsingError, RucioException
+from rucio.common.types import InternalAccount, InternalScope
 
 try:
     # Python 2
@@ -84,41 +98,27 @@ except ImportError:
     # Python 3
     import urllib.parse as urlparse
 
-from rucio.common.config import config_get
-from rucio.common.exception import MissingModuleException, InvalidType, InputValidationError, MetalinkJsonParsingError, RucioException
-from rucio.common.types import InternalAccount, InternalScope
-# delay import until function to avoid circular dependancy (note here for reference)
-# from rucio.core.rse import get_rse_name
-
 # Extra modules: Only imported if available
-EXTRA_MODULES = {'web': False,
-                 'paramiko': False,
-                 'flask': False}
-
-try:
-    from rucio.db.sqla.enum import EnumSymbol
-    EXTRA_MODULES['rucio.db.sqla.enum'] = True
-except ImportError:
-    EXTRA_MODULES['rucio.db.sqla.enum'] = False
+EXTRA_MODULES = {'paramiko': False}
 
 for extra_module in EXTRA_MODULES:
-    try:
-        imp.find_module(extra_module)
-        EXTRA_MODULES[extra_module] = True
-    except ImportError:
-        EXTRA_MODULES[extra_module] = False
-
-if EXTRA_MODULES['web']:
-    from web import HTTPError
+    if 'imp' in sys.modules:
+        try:
+            imp.find_module(extra_module)
+            EXTRA_MODULES[extra_module] = True
+        except ImportError:
+            EXTRA_MODULES[extra_module] = False
+    else:
+        if importlib.util.find_spec(extra_module):
+            EXTRA_MODULES[extra_module] = True
+        else:
+            EXTRA_MODULES[extra_module] = False
 
 if EXTRA_MODULES['paramiko']:
     try:
         from paramiko import RSAKey
     except Exception:
         EXTRA_MODULES['paramiko'] = False
-
-if EXTRA_MODULES['flask']:
-    from flask import Response
 
 # HTTP code dictionary. Not complete. Can be extended if needed.
 codes = {
@@ -260,13 +260,6 @@ def generate_uuid():
 
 def generate_uuid_bytes():
     return uuid().bytes
-
-
-def clean_headers(msg):
-    invalid_characters = ['\n', '\r']
-    for c in invalid_characters:
-        msg = str(msg).replace(c, ' ')
-    return msg
 
 
 # GLOBALLY_SUPPORTED_CHECKSUMS = ['adler32', 'md5', 'sha256', 'crc32']
@@ -422,8 +415,8 @@ class APIEncoder(json.JSONEncoder):
             return obj.isoformat()
         elif isinstance(obj, datetime.timedelta):
             return obj.days * 24 * 60 * 60 + obj.seconds
-        elif isinstance(obj, EnumSymbol):
-            return obj.description
+        elif isinstance(obj, Enum):
+            return obj.name
         elif isinstance(obj, (InternalAccount, InternalScope)):
             return obj.external
         return json.JSONEncoder.default(self, obj)
@@ -466,54 +459,6 @@ def parse_response(data):
     return json.loads(ret_obj, object_hook=datetime_parser)
 
 
-def generate_http_error(status_code, exc_cls, exc_msg):
-    """
-    utitily function to generate a complete HTTP error response.
-    :param status_code: The HTTP status code to generate a response for.
-    :param exc_cls: The name of the exception class to send with the response.
-    :param exc_msg: The error message.
-    :returns: a web.py HTTP response object.
-    """
-    status = codes[status_code]
-    data = {'ExceptionClass': exc_cls,
-            'ExceptionMessage': exc_msg}
-    # Truncate too long exc_msg
-    if len(str(exc_msg)) > 15000:
-        exc_msg = str(exc_msg)[:15000]
-    headers = {'Content-Type': 'application/octet-stream',
-               'ExceptionClass': exc_cls,
-               'ExceptionMessage': clean_headers(exc_msg)}
-    try:
-        return HTTPError(status, headers=headers, data=render_json(**data))
-    except Exception:
-        print({'Content-Type': 'application/octet-stream', 'ExceptionClass': exc_cls, 'ExceptionMessage': str(exc_msg).strip()})
-        raise
-
-
-def generate_http_error_flask(status_code, exc_cls, exc_msg):
-    """
-    utitily function to generate a complete HTTP error response.
-    :param status_code: The HTTP status code to generate a response for.
-    :param exc_cls: The name of the exception class to send with the response.
-    :param exc_msg: The error message.
-    :returns: a web.py HTTP response object.
-    """
-    data = {'ExceptionClass': exc_cls,
-            'ExceptionMessage': exc_msg}
-    # Truncate too long exc_msg
-    if len(str(exc_msg)) > 15000:
-        exc_msg = str(exc_msg)[:15000]
-    resp = Response(response=render_json(**data), status=status_code, content_type='application/octet-stream')
-    resp.headers['ExceptionClass'] = exc_cls
-    resp.headers['ExceptionMessage'] = clean_headers(exc_msg)
-
-    try:
-        return resp
-    except Exception:
-        print({'Content-Type': 'application/octet-stream', 'ExceptionClass': exc_cls, 'ExceptionMessage': str(exc_msg).strip()})
-        raise
-
-
 def execute(cmd, blocking=True):
     """
     Executes a command in a subprocess. Returns a tuple
@@ -529,15 +474,12 @@ def execute(cmd, blocking=True):
                                stdin=subprocess.PIPE,
                                stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE)
-    out = ''
-    err = ''
-    exitcode = 0
 
     if blocking:
         result = process.communicate()
         (out, err) = result
         exitcode = process.returncode
-        return exitcode, out, err
+        return exitcode, out.decode(), err.decode()
     return process
 
 
@@ -579,9 +521,9 @@ def my_key_generator(namespace, fn, **kw):
 
 
 def get_logger(name):
-    logger = getLogger(name)
+    logger = logging.getLogger(name)
     hdlr = RotatingFileHandler('%s/%s.log' % (config_get('common', 'logdir'), name), maxBytes=1000000000, backupCount=10)
-    formatter = Formatter('%(asctime)s\t%(process)d\t%(levelname)s\t%(message)s')
+    formatter = logging.Formatter('%(asctime)s\t%(process)d\t%(levelname)s\t%(message)s')
     hdlr.setFormatter(formatter)
     logger.addHandler(hdlr)
     logger.setLevel(config_get('common', 'loglevel').upper())
@@ -732,6 +674,10 @@ def clean_surls(surls):
             surl = re.sub('/srm/managerv1\?SFN=', '', surl)  # NOQA: W605
             surl = re.sub('/srm/v2/server\?SFN=', '', surl)  # NOQA: W605
             surl = re.sub('/srm/managerv2\?SFN=', '', surl)  # NOQA: W605
+        if surl.startswith('https://storage.googleapis.com'):
+            surl = surl.split('?GoogleAccessId')[0]
+        if '?X-Amz' in surl:
+            surl = surl.split('?X-Amz')[0]
         res.append(surl)
     res.sort()
     return res
@@ -762,12 +708,34 @@ def extract_scope_atlas(did, scopes):
 def extract_scope_belleii(did, scopes):
     split_did = did.split('/')
     if did.startswith('/belle/MC/'):
+        if did.startswith('/belle/MC/BG') or \
+           did.startswith('/belle/MC/build') or \
+           did.startswith('/belle/MC/generic') or \
+           did.startswith('/belle/MC/log') or \
+           did.startswith('/belle/MC/mcprod') or \
+           did.startswith('/belle/MC/prerelease') or \
+           did.startswith('/belle/MC/release'):
+            return 'mc', did
+        if did.startswith('/belle/MC/cert') or \
+           did.startswith('/belle/MC/dirac') or \
+           did.startswith('/belle/MC/dr3') or \
+           did.startswith('/belle/MC/fab') or \
+           did.startswith('/belle/MC/hideki') or \
+           did.startswith('/belle/MC/merge') or \
+           did.startswith('/belle/MC/migration') or \
+           did.startswith('/belle/MC/skim') or \
+           did.startswith('/belle/MC/test'):
+            return 'mc_tmp', did
         if len(split_did) > 4:
-            if split_did[3] in ['fab', 'merge1', 'skim']:
+            if split_did[3].find('fab') > -1 or split_did[3].find('merge') > -1 or split_did[3].find('skim') > -1:
                 return 'mc_tmp', did
-        return 'mc', did
+            if split_did[3].find('release') > -1:
+                return 'mc', did
+        return 'mc_tmp', did
     if did.startswith('/belle/Raw/'):
         return 'raw', did
+    if did.startswith('/belle/hRaw'):
+        return 'hraw', did
     if did.startswith('/belle/user/'):
         if len(split_did) > 4:
             if len(split_did[3]) == 1 and 'user.%s' % (split_did[4]) in scopes:
@@ -776,13 +744,35 @@ def extract_scope_belleii(did, scopes):
             if 'user.%s' % (split_did[3]) in scopes:
                 return 'user.%s' % split_did[3], did
         return 'user', did
+    if did.startswith('/belle/group/'):
+        if len(split_did) > 4:
+            if 'group.%s' % (split_did[4]) in scopes:
+                return 'group.%s' % split_did[4], did
+        return 'group', did
     if did.startswith('/belle/data/') or did.startswith('/belle/Data/'):
         if len(split_did) > 4:
-            if split_did[3] in ['fab', 'skim']:
+            if split_did[3] in ['fab', 'skim']:  # /belle/Data/fab --> data_tmp
                 return 'data_tmp', did
-        return 'data', did
-    if did.startswith('/belle/ddm/functional_tests/') or did.startswith('/belle/ddm/tests/'):
+            if split_did[3].find('release') > -1:  # /belle/Data/release --> data
+                return 'data', did
+        if len(split_did) > 5:
+            if split_did[3] in ['proc']:  # /belle/Data/proc
+                if split_did[4].find('release') > -1:  # /belle/Data/proc/release*
+                    if len(split_did) > 7 and split_did[6] in ['GCR2c', 'prod00000007', 'prod6b', 'proc7b',
+                                                               'proc8b', 'Bucket4', 'Bucket6test', 'bucket6',
+                                                               'proc9', 'bucket7', 'SKIMDATAx1', 'proc10Valid',
+                                                               'proc10', 'SkimP10x1', 'SkimP11x1', 'SkimB9x1',
+                                                               'SkimB10x1', 'SkimB11x1']:  # /belle/Data/proc/release*/*/proc10/* --> data_tmp (Old convention)
+                        return 'data_tmp', did
+                    else:  # /belle/Data/proc/release*/*/proc11/* --> data (New convention)
+                        return 'data', did
+                if split_did[4].find('fab') > -1:  # /belle/Data/proc/fab* --> data_tmp
+                    return 'data_tmp', did
+        return 'data_tmp', did
+    if did.startswith('/belle/ddm/functional_tests/') or did.startswith('/belle/ddm/tests/') or did.startswith('/belle/test/ddm_test'):
         return 'test', did
+    if did.startswith('/belle/BG/'):
+        return 'data', did
     return 'other', did
 
 
@@ -1350,3 +1340,127 @@ def query_bunches(query, bunch_by):
     if item_bunch:
         filtered_bunches.append(item_bunch)
     return filtered_bunches
+
+
+def setup_logger(module_name=None, logger_name=None, logger_level=None, verbose=False):
+    '''
+    Factory method to set logger with handlers.
+    :param module_name: __name__ of the module that is calling this method
+    :param logger_name: name of the logger, typically name of the module.
+    :param logger_level: if not given, fetched from config.
+    :param verbose: verbose option set in bin/rucio
+    '''
+    # helper method for cfg check
+    def _force_cfg_log_level(cfg_option):
+        cfg_forced_modules = config_get('logging', cfg_option, raise_exception=False, default=None, clean_cached=True)
+        if cfg_forced_modules:
+            if re.match(str(cfg_forced_modules), module_name):
+                return True
+        return False
+
+    # creating log
+    if not logger_name:
+        if not module_name:
+            logger_name = 'usr'
+        else:
+            logger_name = module_name.split('.')[-1]
+    logger = logging.getLogger(logger_name)
+
+    # extracting the log level
+    if not logger_level:
+        logger_level = logging.WARNING
+        if verbose:
+            logger_level = logging.DEBUG
+
+        # overriding by the config
+        cfg_levels = (logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR)
+        for level in cfg_levels:
+            cfg_opt = 'forceloglevel' + logging.getLevelName(level)
+            if _force_cfg_log_level(cfg_opt):
+                logger_level = level
+
+    # setting the log level
+    logger.setLevel(logger_level)
+
+    # preferred logger handling
+    def add_handler(logger):
+        hdlr = logging.StreamHandler()
+
+        def emit_decorator(fnc):
+            def func(*args):
+                if 'RUCIO_LOGGING_FORMAT' not in os.environ:
+                    levelno = args[0].levelno
+                    format_str = '%(asctime)s\t%(levelname)s\t%(message)s\033[0m'
+                    if levelno >= logging.CRITICAL:
+                        color = '\033[31;1m'
+                    elif levelno >= logging.ERROR:
+                        color = '\033[31;1m'
+                    elif levelno >= logging.WARNING:
+                        color = '\033[33;1m'
+                    elif levelno >= logging.INFO:
+                        color = '\033[32;1m'
+                    elif levelno >= logging.DEBUG:
+                        color = '\033[36;1m'
+                        format_str = '%(asctime)s\t%(levelname)s\t%(filename)s\t%(message)s\033[0m'
+                    else:
+                        color = '\033[0m'
+                    formatter = logging.Formatter('{0}{1}'.format(color, format_str))
+                else:
+                    formatter = logging.Formatter(os.environ['RUCIO_LOGGING_FORMAT'])
+                hdlr.setFormatter(formatter)
+                return fnc(*args)
+            return func
+        hdlr.emit = emit_decorator(hdlr.emit)
+        logger.addHandler(hdlr)
+
+    # setting handler and formatter
+    if not logger.handlers:
+        add_handler(logger)
+
+    return logger
+
+
+class retry:
+    """Retry callable object with configuragle number of attempts"""
+
+    def __init__(self, func, *args, **kwargs):
+        '''
+        :param func: a method that should be executed with retries
+        :param args parametres of the func
+        :param kwargs: key word arguments of the func
+        '''
+        self.func, self.args, self.kwargs = func, args, kwargs
+
+    def __call__(self, mtries=3, logger=None):
+        '''
+        :param mtries: maximum number of attempts to execute the function
+        :param logger: preferred logger
+        '''
+        attempt = mtries
+        while attempt > 1:
+            try:
+                if logger:
+                    logger.debug('{}: Attempt {}'.format(self.func.__name__, mtries - attempt + 1))
+                return self.func(*self.args, **self.kwargs)
+            except Exception as e:
+                if logger:
+                    logger.debug('{}: Attempt failed {}'.format(self.func.__name__, mtries - attempt + 1))
+                    logger.debug(str(e))
+                attempt -= 1
+        return self.func(*self.args, **self.kwargs)
+
+
+def formatted_logger(innerfunc, formatstr="%s"):
+    """
+    Decorates the passed function, formatting log input by
+    the passed formatstr. The format string must always include a %s.
+
+    :param innerfunc: function to be decorated. Must take (level, msg) arguments.
+    :type innerfunc: Callable
+    :param formatstr: format string with %s as placeholder.
+    :type formatstr: str
+    """
+    @functools.wraps(innerfunc)
+    def log_format(level, msg, *args, **kwargs):
+        return innerfunc(level, formatstr % msg, *args, **kwargs)
+    return log_format

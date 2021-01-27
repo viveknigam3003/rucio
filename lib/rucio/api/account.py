@@ -1,22 +1,28 @@
-# Copyright European Organization for Nuclear Research (CERN)
+# -*- coding: utf-8 -*-
+# Copyright 2012-2020 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
-# You may not use this file except in compliance with the License.
-# You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 #
 # Authors:
-# - Vincent Garonne, <vincent.garonne@cern.ch>, 2011-2013
-# - Angelos Molfetas, <angelos.molfetas@cern.ch>, 2011
-# - Thomas Beermann, <thomas.beermann@cern.ch>, 2012
-# - Mario Lassnig, <mario.lassnig@cern.ch>, 2012
-# - Martin Barisits, <martin.barisits@cern.ch>, 2014
-# - Joaquin Bogado, <joaquin.bogado@cern.ch>, 2015
-# - Cedric Serfon, <cedric.serfon@cern.ch>, 2015-2019
-# - Hannes Hansen, <hannes.jakob.hansen@cern.ch>, 2018
-# - Andrew Lister, <andrew.lister@stfc.ac.uk>, 2019
-# - Patrick Austin, <patrick.austin@stfc.ac.uk>, 2020
-#
-# PY3K COMPATIBLE
+# - Mario Lassnig <mario.lassnig@cern.ch>, 2012-2020
+# - Vincent Garonne <vincent.garonne@cern.ch>, 2012-2015
+# - Thomas Beermann <thomas.beermann@cern.ch>, 2012
+# - Martin Barisits <martin.barisits@cern.ch>, 2014
+# - Joaquín Bogado <jbogado@linti.unlp.edu.ar>, 2015
+# - Cedric Serfon <cedric.serfon@cern.ch>, 2015-2019
+# - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2018
+# - Andrew Lister <andrew.lister@stfc.ac.uk>, 2019
+# - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
 
 import rucio.api.permission
 import rucio.common.exception
@@ -43,7 +49,7 @@ def add_account(account, type, email, issuer, vo='def'):
 
     """
 
-    validate_schema(name='account', obj=account)
+    validate_schema(name='account', obj=account, vo=vo)
 
     kwargs = {'account': account, 'type': type}
     if not rucio.api.permission.has_permission(issuer=issuer, vo=vo, action='add_account', kwargs=kwargs):
@@ -51,7 +57,7 @@ def add_account(account, type, email, issuer, vo='def'):
 
     account = InternalAccount(account, vo=vo)
 
-    account_core.add_account(account, AccountType.from_sym(type), email)
+    account_core.add_account(account, AccountType[type.upper()], email)
 
 
 def del_account(account, issuer, vo='def'):
@@ -97,7 +103,7 @@ def update_account(account, key, value, issuer='root', vo='def'):
     :param issuer: The issuer account
     :param vo: The VO to act on.
     """
-    validate_schema(name='account', obj=account)
+    validate_schema(name='account', obj=account, vo=vo)
     kwargs = {}
     if not rucio.api.permission.has_permission(issuer=issuer, vo=vo, action='update_account', kwargs=kwargs):
         raise rucio.common.exception.AccessDenied('Account %s can not change %s  of the account' % (issuer, key))
@@ -180,8 +186,8 @@ def add_account_attribute(key, value, account, issuer, vo='def'):
     :param issuer: The issuer account.
     :param vo: The VO to act on.
     """
-    validate_schema(name='account_attribute', obj=key)
-    validate_schema(name='account_attribute', obj=value)
+    validate_schema(name='account_attribute', obj=key, vo=vo)
+    validate_schema(name='account_attribute', obj=value, vo=vo)
 
     kwargs = {'account': account, 'key': key, 'value': value}
     if not rucio.api.permission.has_permission(issuer=issuer, vo=vo, action='add_attribute', kwargs=kwargs):

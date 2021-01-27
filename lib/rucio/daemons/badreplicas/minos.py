@@ -1,4 +1,5 @@
-# Copyright 2013-2018 CERN for the benefit of the ATLAS collaboration.
+# -*- coding: utf-8 -*-
+# Copyright 2018-2021 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,12 +15,14 @@
 #
 # Authors:
 # - Cedric Serfon <cedric.serfon@cern.ch>, 2018-2019
+# - Martin Barisits <martin.barisits@cern.ch>, 2018-2019
 # - Andrew Lister <andrew.lister@stfc.ac.uk>, 2019
-# - Brandon White <bjwhite@fnal.gov>, 2019-2020
-# - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
+# - Brandon White <bjwhite@fnal.gov>, 2019
 # - Thomas Beermann <thomas.beermann@cern.ch>, 2020
-#
-# PY3K COMPATIBLE
+# - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
+# - Eli Chadwick <eli.chadwick@stfc.ac.uk>, 2020
+# - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020
+# - Dimitrios Christidis <dimitrios.christidis@cern.ch>, 2021
 
 from __future__ import division
 
@@ -27,27 +30,24 @@ import logging
 import math
 import os
 import socket
-import traceback
 import threading
 import time
-
+import traceback
 from datetime import datetime
 from sys import stdout
 
-from rucio.db.sqla.constants import BadFilesStatus, BadPFNStatus, ReplicaState
-
-from rucio.db.sqla.session import get_session
+import rucio.db.sqla.util
 from rucio.common.config import config_get
+from rucio.common.exception import UnsupportedOperation, DataIdentifierNotFound, ReplicaNotFound, DatabaseException
 from rucio.common.utils import chunks
-from rucio.common.exception import UnsupportedOperation, DataIdentifierNotFound, ReplicaNotFound
+from rucio.core import heartbeat
 from rucio.core.did import get_metadata
 from rucio.core.replica import (get_bad_pfns, get_pfn_to_rse, declare_bad_file_replicas,
                                 get_did_from_pfns, update_replicas_states, bulk_add_bad_replicas,
                                 bulk_delete_bad_pfns, get_replicas_state)
 from rucio.core.rse import get_rse_name
-
-from rucio.core import heartbeat
-
+from rucio.db.sqla.constants import BadFilesStatus, BadPFNStatus, ReplicaState
+from rucio.db.sqla.session import get_session
 
 logging.basicConfig(stream=stdout,
                     level=getattr(logging,
@@ -108,12 +108,12 @@ def minos(bulk=1000, once=False, sleep_time=60):
                 account = pfn['account']
                 reason = pfn['reason']
                 expires_at = pfn['expires_at']
-                state = pfn['state']
-                if states_mapping[state] in [BadFilesStatus.BAD, BadFilesStatus.SUSPICIOUS]:
+                state = states_mapping[pfn['state']]
+                if state in [BadFilesStatus.BAD, BadFilesStatus.SUSPICIOUS]:
                     if (account, reason, state) not in bad_replicas:
                         bad_replicas[(account, reason, state)] = []
                     bad_replicas[(account, reason, state)].append(path)
-                if states_mapping[state] == BadFilesStatus.TEMPORARY_UNAVAILABLE:
+                elif state == BadFilesStatus.TEMPORARY_UNAVAILABLE:
                     if (account, reason, expires_at) not in temporary_unvailables:
                         temporary_unvailables[(account, reason, expires_at)] = []
                     temporary_unvailables[(account, reason, expires_at)].append(path)
@@ -141,7 +141,7 @@ def minos(bulk=1000, once=False, sleep_time=60):
                             if rse_id not in dict_rse:
                                 dict_rse[rse_id] = []
                             dict_rse[rse_id].extend(tmp_dict_rse[rse_id])
-                            unknown_replicas.extend(tmp_unknown_replicas.get('unknown', []))
+                        unknown_replicas.extend(tmp_unknown_replicas.get('unknown', []))
                     # The replicas in unknown_replicas do not exist, so we flush them from bad_pfns
                     if unknown_replicas:
                         logging.info(prepend_str + 'The following replicas are unknown and will be removed : %s' % str(unknown_replicas))
@@ -238,7 +238,7 @@ def minos(bulk=1000, once=False, sleep_time=60):
                                     elif expires_at < datetime.now():
                                         logging.info('%s PFN %s expiration time (%s) is older than now and is not in unavailable state. Removing the PFNs from bad_pfns', prepend_str, str(rep['pfn']), expires_at)
                                         bulk_delete_bad_pfns(pfns=[rep['pfn']], session=None)
-                                except (DataIdentifierNotFound, ReplicaNotFound) as error:
+                                except (DataIdentifierNotFound, ReplicaNotFound):
                                     logging.error(prepend_str + 'Will remove %s from the list of bad PFNs' % str(rep['pfn']))
                                     bulk_delete_bad_pfns(pfns=[rep['pfn']], session=None)
                             session = get_session()
@@ -268,6 +268,8 @@ def run(threads=1, bulk=100, once=False, sleep_time=60):
     """
     Starts up the minos threads.
     """
+    if rucio.db.sqla.util.is_old_db():
+        raise DatabaseException('Database was not updated, daemon won\'t start')
 
     if once:
         logging.info('Will run only one iteration in a single threaded mode')

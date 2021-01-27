@@ -1,4 +1,5 @@
-# Copyright 2012-2020 CERN for the benefit of the ATLAS collaboration.
+# -*- coding: utf-8 -*-
+# Copyright 2012-2021 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,24 +14,27 @@
 # limitations under the License.
 #
 # Authors:
-# - Vincent Garonne <vgaronne@gmail.com>, 2012-2018
+# - Vincent Garonne <vincent.garonne@cern.ch>, 2012-2018
 # - Ralph Vigne <ralph.vigne@cern.ch>, 2012-2015
-# - Mario Lassnig <mario.lassnig@cern.ch>, 2012-2020
+# - Mario Lassnig <mario.lassnig@cern.ch>, 2012-2021
 # - Martin Barisits <martin.barisits@cern.ch>, 2013-2020
 # - Cedric Serfon <cedric.serfon@cern.ch>, 2013-2018
 # - Thomas Beermann <thomas.beermann@cern.ch>, 2014-2017
-# - Wen Guan <wguan.icedew@gmail.com>, 2015-2016
+# - Wen Guan <wen.guan@cern.ch>, 2015-2016
 # - Brian Bockelman <bbockelm@cse.unl.edu>, 2018
 # - Frank Berghaus <frank.berghaus@cern.ch>, 2018
-# - Dimitrios Christidis <dimitrios.christidis@cern.ch>, 2018-2019
-# - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2018
-# - Gabriele Fronze' <gfronze@cern.ch>, 2019
+# - Joaquín Bogado <jbogado@linti.unlp.edu.ar>, 2018
+# - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2018-2019
+# - Dimitrios Christidis <dimitrios.christidis@cern.ch>, 2018-2020
+# - James Perry <j.perry@epcc.ed.ac.uk>, 2019
 # - Andrew Lister <andrew.lister@stfc.ac.uk>, 2019
-# - Brandon White <bjwhite@fnal.gov>, 2019-2020
+# - Brandon White <bjwhite@fnal.gov>, 2019
+# - Gabriele Fronze' <gfronze@cern.ch>, 2019
 # - Aristeidis Fkiaras <aristeidis.fkiaras@cern.ch>, 2019
 # - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
-#
-# PY3K COMPATIBLE
+# - Eli Chadwick <eli.chadwick@stfc.ac.uk>, 2020
+# - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020
+# - Tomas Javurek <tomas.javurek@cern.ch>, 2020
 
 from __future__ import division
 
@@ -96,7 +100,7 @@ def add_rse(rse, vo='def', deterministic=True, volatile=False, city=None, region
     :param session: The database session in use.
     """
     if isinstance(rse_type, string_types):
-        rse_type = RSEType.from_string(str(rse_type))
+        rse_type = RSEType(rse_type)
 
     new_rse = models.RSE(rse=rse, vo=vo, deterministic=deterministic, volatile=volatile, city=city,
                          region_code=region_code, country_name=country_name,
@@ -383,7 +387,7 @@ def list_rses(filters={}, session=None):
         for (k, v) in filters.items():
             if hasattr(models.RSE, k):
                 if k == 'rse_type':
-                    query = query.filter(getattr(models.RSE, k) == RSEType.from_sym(v))
+                    query = query.filter(getattr(models.RSE, k) == RSEType[v])
                 else:
                     query = query.filter(getattr(models.RSE, k) == v)
             elif k in ['availability_read', 'availability_write', 'availability_delete']:
@@ -701,7 +705,7 @@ def get_rse_usage(rse_id, source=None, session=None, per_account=False):
                      'total': total,
                      'files': row.files,
                      'updated_at': row.updated_at}
-        if per_account:
+        if per_account and row.source == 'rucio':
             query_account_usage = session.query(models.AccountUsage).filter_by(rse_id=rse_id)
             account_usages = []
             for row in query_account_usage:
@@ -721,7 +725,7 @@ def set_rse_limits(rse_id, name, value, session=None):
 
     :param rse_id: The RSE id.
     :param name: The name of the limit.
-    :param value: The feature value. Set to -1 to remove the limit.
+    :param value: The feature value.
     :param session: The database session in use.
 
     :returns: True if successful, otherwise false.
@@ -753,7 +757,7 @@ def get_rse_limits(rse_id, name=None, session=None):
 
 
 @transactional_session
-def delete_rse_limit(rse_id, name=None, session=None):
+def delete_rse_limits(rse_id, name=None, session=None):
     """
     Delete RSE limit.
 
@@ -930,17 +934,21 @@ def add_protocol(rse_id, parameter, session=None):
         new_protocol.save(session=session)
     except (IntegrityError, FlushError, OperationalError) as error:
         if ('UNIQUE constraint failed' in error.args[0]) or ('conflicts with persistent instance' in error.args[0]) \
-           or match('.*IntegrityError.*ORA-00001: unique constraint.*RSE_PROTOCOLS_PK.*violated.*', error.args[0]) \
-           or match('.*IntegrityError.*1062.*Duplicate entry.*for key.*', error.args[0]) \
-           or match('.*IntegrityError.*duplicate key value violates unique constraint.*', error.args[0])\
-           or match('.*UniqueViolation.*duplicate key value violates unique constraint.*', error.args[0])\
-           or match('.*IntegrityError.*columns.*are not unique.*', error.args[0]):
+                or match('.*IntegrityError.*ORA-00001: unique constraint.*RSE_PROTOCOLS_PK.*violated.*', error.args[0]) \
+                or match('.*IntegrityError.*1062.*Duplicate entry.*for key.*', error.args[0]) \
+                or match('.*IntegrityError.*duplicate key value violates unique constraint.*', error.args[0]) \
+                or match('.*UniqueViolation.*duplicate key value violates unique constraint.*', error.args[0]) \
+                or match('.*IntegrityError.*columns.*are not unique.*', error.args[0]):
             raise exception.Duplicate('Protocol \'%s\' on port %s already registered for  \'%s\' with hostname \'%s\'.' % (parameter['scheme'], parameter['port'], rse, parameter['hostname']))
         elif 'may not be NULL' in error.args[0] \
-             or match('.*IntegrityError.*ORA-01400: cannot insert NULL into.*RSE_PROTOCOLS.*IMPL.*', error.args[0]) \
-             or match('.*OperationalError.*cannot be null.*', error.args[0]):
+                or match('.*IntegrityError.*ORA-01400: cannot insert NULL into.*RSE_PROTOCOLS.*IMPL.*', error.args[0]) \
+                or match('.*IntegrityError.*Column.*cannot be null.*', error.args[0]) \
+                or match('.*IntegrityError.*null value in column.*violates not-null constraint.*', error.args[0]) \
+                or match('.*NotNullViolation.*null value in column.*violates not-null constraint.*', error.args[0]) \
+                or match('.*OperationalError.*cannot be null.*', error.args[0]):
             raise exception.InvalidObject('Missing values!')
-        raise error
+
+        raise exception.RucioException(error.args)
     return new_protocol
 
 
@@ -990,7 +998,7 @@ def get_rse_protocols(rse_id, schemes=None, session=None):
             'protocols': list(),
             'qos_class': _rse.qos_class,
             'rse': _rse.rse,
-            'rse_type': str(_rse.rse_type),
+            'rse_type': _rse.rse_type.name,
             'sign_url': sign_url[0] if sign_url else None,
             'staging_area': _rse.staging_area,
             'verify_checksum': verify_checksum[0] if verify_checksum else True,

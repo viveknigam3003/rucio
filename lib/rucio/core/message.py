@@ -1,4 +1,5 @@
-# Copyright 2014-2019 CERN for the benefit of the ATLAS collaboration.
+# -*- coding: utf-8 -*-
+# Copyright 2014-2020 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,15 +14,14 @@
 # limitations under the License.
 #
 # Authors:
-# - Mario Lassnig <mario.lassnig@cern.ch>, 2014-2019
-# - Vincent Garonne <vgaronne@gmail.com>, 2014-2017
+# - Mario Lassnig <mario.lassnig@cern.ch>, 2014-2020
+# - Vincent Garonne <vincent.garonne@cern.ch>, 2014-2017
 # - Martin Barisits <martin.barisits@cern.ch>, 2014-2019
 # - Robert Illingworth <illingwo@fnal.gov>, 2018
-# - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2018
-# - Brandon White <bjwhite@fnal.gov>, 2019-2020
+# - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2018-2019
+# - Brandon White <bjwhite@fnal.gov>, 2019
 # - Cedric Serfon <cedric.serfon@cern.ch>, 2020
-#
-# PY3K COMPATIBLE
+# - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020
 
 import json
 
@@ -68,7 +68,7 @@ def add_message(event_type, payload, session=None):
 
     try:
         payload = json.dumps(payload, cls=APIEncoder)
-    except TypeError as e:
+    except TypeError as e:  # noqa: F841
         raise InvalidObject('Invalid JSON for payload: %(e)s' % locals())
 
     if len(payload) > 4000:
@@ -106,18 +106,25 @@ def retrieve_messages(bulk=1000, thread=None, total_threads=None, event_type=Non
         # Step 1:
         # MySQL does not support limits in nested queries, limit on the outer query instead.
         # This is not as performant, but the best we can get from MySQL.
+        # FIXME: SQLAlchemy generates wrong nowait MySQL8 statement for MySQL5
+        #        Remove once this is resolved in SQLAlchemy
         if session.bind.dialect.name == 'mysql':
             subquery = subquery.order_by(Message.created_at)
+            query = session.query(Message.id,
+                                  Message.created_at,
+                                  Message.event_type,
+                                  Message.payload,
+                                  Message.services)\
+                           .filter(Message.id.in_(subquery))
         else:
             subquery = subquery.order_by(Message.created_at).limit(bulk)
-
-        query = session.query(Message.id,
-                              Message.created_at,
-                              Message.event_type,
-                              Message.payload,
-                              Message.services)\
-            .filter(Message.id.in_(subquery))\
-            .with_for_update(nowait=True)
+            query = session.query(Message.id,
+                                  Message.created_at,
+                                  Message.event_type,
+                                  Message.payload,
+                                  Message.services)\
+                           .filter(Message.id.in_(subquery))\
+                           .with_for_update(nowait=True)
 
         # Step 2:
         # MySQL does not support limits in nested queries, limit on the outer query instead.

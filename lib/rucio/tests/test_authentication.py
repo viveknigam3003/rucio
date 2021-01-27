@@ -1,35 +1,45 @@
-'''
- Copyright European Organization for Nuclear Research (CERN)
-
- Licensed under the Apache License, Version 2.0 (the "License");
- You may not use this file except in compliance with the License.
- You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
-
- Authors:
- - Mario Lassnig, <mario.lassnig@cern.ch>, 2012, 2017
- - Vincent Garonne,  <vincent.garonne@cern.ch> , 2011-2017
- - Andrew Lister, <andrew.lister@stfc.ac.uk>, 2019
- - Ruturaj Gujar, <ruturaj.gujar23@gmail.com>, 2019
- - Eli Chadwick, <eli.chadwick@stfc.ac.uk>, 2020
- - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
-
-'''
+# -*- coding: utf-8 -*-
+# Copyright 2012-2020 CERN
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Authors:
+# - Mario Lassnig <mario.lassnig@cern.ch>, 2012-2018
+# - Vincent Garonne <vincent.garonne@cern.ch>, 2012-2017
+# - Angelos Molfetas <Angelos.Molfetas@cern.ch>, 2012
+# - Thomas Beermann <thomas.beermann@cern.ch>, 2013
+# - Martin Barisits <martin.barisits@cern.ch>, 2017
+# - Andrew Lister <andrew.lister@stfc.ac.uk>, 2019
+# - Ruturaj Gujar <ruturaj.gujar23@gmail.com>, 2019
+# - Eli Chadwick <eli.chadwick@stfc.ac.uk>, 2020
+# - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
+# - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020
 
 import base64
+import unittest
 
-from nose.tools import assert_equal, assert_is_none, assert_is_not_none, assert_greater, assert_in, assert_raises
-from paste.fixture import TestApp
+import pytest
+from requests import session
 
-from rucio.api.authentication import get_auth_token_user_pass, get_auth_token_ssh, get_ssh_challenge_token, get_auth_token_saml
+from rucio.api.authentication import get_auth_token_user_pass, get_auth_token_ssh, get_ssh_challenge_token, \
+    get_auth_token_saml
 from rucio.common.config import config_get, config_get_bool
 from rucio.common.exception import Duplicate, AccessDenied
 from rucio.common.types import InternalAccount
 from rucio.common.utils import ssh_sign
 from rucio.core.identity import add_account_identity, del_account_identity
 from rucio.db.sqla.constants import IdentityType
-from rucio.web.rest.authentication import APP
-
-from requests import session
+from rucio.tests.common import headers, hdrdict, loginhdr, vohdr
 
 PUBLIC_KEY = "ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEAq5LySllrQFpPL"\
              "614sulXQ7wnIr1aGhGtl8b+HCB/0FhMSMTHwSjX78UbfqEorZ"\
@@ -69,11 +79,11 @@ VPEtp2ruk2N7rv0DixwcEQlD/DqsfmR2/QWDeDd1xxoTXPhIXQ==
 -----END RSA PRIVATE KEY-----"""
 
 
-class TestAuthCoreApi(object):
+class TestAuthCoreApi(unittest.TestCase):
     '''
     TestAuthCoreApi
     '''
-    def setup(self):
+    def setUp(self):
         if config_get_bool('common', 'multi_vo', raise_exception=False, default=False):
             self.vo = {'vo': config_get('client', 'vo', raise_exception=False, default='tst')}
         else:
@@ -82,12 +92,12 @@ class TestAuthCoreApi(object):
     def test_get_auth_token_user_pass_success(self):
         """AUTHENTICATION (CORE): Username and password (correct credentials)."""
         result = get_auth_token_user_pass(account='root', username='ddmlab', password='secret', appid='test', ip='127.0.0.1', **self.vo)
-        assert_is_not_none(result)
+        assert result is not None
 
     def test_get_auth_token_user_pass_fail(self):
         """AUTHENTICATION (CORE): Username and password (correct credentials)."""
         result = get_auth_token_user_pass(account='root', username='ddmlab', password='not_secret', appid='test', ip='127.0.0.1', **self.vo)
-        assert_is_none(result)
+        assert result is None
 
     def test_get_auth_token_ssh_success(self):
         """AUTHENTICATION (CORE): SSH RSA public key exchange (good signature)."""
@@ -104,7 +114,7 @@ class TestAuthCoreApi(object):
 
         result = get_auth_token_ssh(account='root', signature=signature, appid='test', ip='127.0.0.1', **self.vo)
 
-        assert_is_not_none(result)
+        assert result is not None
 
         del_account_identity(PUBLIC_KEY, IdentityType.SSH, root)
 
@@ -121,10 +131,11 @@ class TestAuthCoreApi(object):
 
         result = get_auth_token_ssh(account='root', signature=signature, appid='test', ip='127.0.0.1', **self.vo)
 
-        assert_is_none(result)
+        assert result is None
 
         del_account_identity(PUBLIC_KEY, IdentityType.SSH, root)
 
+    @pytest.mark.xfail(reason='The WebUI isn\'t linked to CERN SSO yet so this needs to be fixed once it is linked')
     def test_get_auth_token_saml_success(self):
         """AUTHENTICATION (CORE): SAML NameID (correct credentials)."""
         root = InternalAccount('root', **self.vo)
@@ -133,12 +144,8 @@ class TestAuthCoreApi(object):
         except Duplicate:
             pass  # might already exist, can skip
 
-        try:
-            result = get_auth_token_saml(account='root', saml_nameid='ddmlab', appid='test', ip='127.0.0.1', **self.vo)
-            assert_is_not_none(result)
-        except:
-            # FIXME: The WebUI isn't linked to CERN SSO yet so this needs to be fixed once it is linked
-            pass
+        result = get_auth_token_saml(account='root', saml_nameid='ddmlab', appid='test', ip='127.0.0.1', **self.vo)
+        assert result is not None
 
         del_account_identity('ddmlab', IdentityType.SAML, root)
 
@@ -150,123 +157,94 @@ class TestAuthCoreApi(object):
         except Duplicate:
             pass  # might already exist, can skip
 
-        with assert_raises(AccessDenied):
+        with pytest.raises(AccessDenied):
             get_auth_token_saml(account='root', saml_nameid='not_ddmlab', appid='test', ip='127.0.0.1', **self.vo)
 
         del_account_identity('ddmlab', IdentityType.SAML, root)
 
 
-class TestAuthRestApi(object):
-    '''
-    TestAuthRestApi
-    '''
-    def setup(self):
-        if config_get_bool('common', 'multi_vo', raise_exception=False, default=False):
-            self.vo = {'vo': config_get('client', 'vo', raise_exception=False, default='tst')}
-            self.vo_header = {'X-Rucio-VO': self.vo['vo']}
-        else:
-            self.vo = {}
-            self.vo_header = {}
+def test_userpass_fail(vo, rest_client):
+    """AUTHENTICATION (REST): Username and password (wrong credentials)."""
+    response = rest_client.get('/auth/userpass', headers=headers(loginhdr('wrong', 'wrong', 'wrong'), vohdr(vo)))
+    assert response.status_code == 401
 
-    def test_userpass_fail(self):
-        """AUTHENTICATION (REST): Username and password (wrong credentials)."""
-        options = []
-        headers = {'X-Rucio-Account': 'wrong', 'X-Rucio-Username': 'wrong', 'X-Rucio-Password': 'wrong'}
-        headers.update(self.vo_header)
-        result = TestApp(APP.wsgifunc(*options)).get('/userpass', headers=headers, expect_errors=True)
-        assert_equal(result.status, 401)
 
-    def test_userpass_success(self):
-        """AUTHENTICATION (REST): Username and password (correct credentials)."""
-        options = []
-        headers = {'X-Rucio-Account': 'root', 'X-Rucio-Username': 'ddmlab', 'X-Rucio-Password': 'secret'}
-        headers.update(self.vo_header)
-        result = TestApp(APP.wsgifunc(*options)).get('/userpass', headers=headers, expect_errors=True)
-        assert_equal(result.status, 200)
-        assert_greater(len(result.header('X-Rucio-Auth-Token')), 32)
+def test_userpass_success(vo, rest_client):
+    """AUTHENTICATION (REST): Username and password (correct credentials)."""
+    response = rest_client.get('/auth/userpass', headers=headers(loginhdr('root', 'ddmlab', 'secret'), vohdr(vo)))
+    assert response.status_code == 200
+    assert len(response.headers.get('X-Rucio-Auth-Token')) > 32
 
-    def test_ssh_success(self):
-        """AUTHENTICATION (REST): SSH RSA public key exchange (correct credentials)."""
 
-        root = InternalAccount('root', **self.vo)
-        try:
-            add_account_identity(PUBLIC_KEY, IdentityType.SSH, root, email='ph-adp-ddm-lab@cern.ch')
-        except Duplicate:
-            pass  # might already exist, can skip
+def test_ssh_success(vo, rest_client):
+    """AUTHENTICATION (REST): SSH RSA public key exchange (correct credentials)."""
 
-        options = []
-        headers = {'X-Rucio-Account': 'root'}
-        headers.update(self.vo_header)
-        result = TestApp(APP.wsgifunc(*options)).get('/ssh_challenge_token', headers=headers, expect_errors=True)
-        assert_equal(result.status, 200)
-        assert_in('challenge-', result.header('X-Rucio-SSH-Challenge-Token'))
+    root = InternalAccount('root', vo=vo)
+    try:
+        add_account_identity(PUBLIC_KEY, IdentityType.SSH, root, email='ph-adp-ddm-lab@cern.ch')
+    except Duplicate:
+        pass  # might already exist, can skip
 
-        signature = ssh_sign(PRIVATE_KEY, result.header('X-Rucio-SSH-Challenge-Token'))
+    headers_dict = {'X-Rucio-Account': 'root'}
+    response = rest_client.get('/auth/ssh_challenge_token', headers=headers(hdrdict(headers_dict), vohdr(vo)))
+    assert response.status_code == 200
+    assert 'challenge-' in response.headers.get('X-Rucio-SSH-Challenge-Token')
 
-        headers = {'X-Rucio-Account': 'root', 'X-Rucio-SSH-Signature': signature}
-        headers.update(self.vo_header)
-        result = TestApp(APP.wsgifunc(*options)).get('/ssh', headers=headers, expect_errors=True)
-        assert_equal(result.status, 200)
-        assert_greater(len(result.header('X-Rucio-Auth-Token')), 32)
+    signature = ssh_sign(PRIVATE_KEY, response.headers.get('X-Rucio-SSH-Challenge-Token'))
 
-        del_account_identity(PUBLIC_KEY, IdentityType.SSH, root)
+    headers_dict = {'X-Rucio-Account': 'root', 'X-Rucio-SSH-Signature': signature}
+    response = rest_client.get('/auth/ssh', headers=headers(hdrdict(headers_dict), vohdr(vo)))
+    assert response.status_code == 200
+    assert len(response.headers.get('X-Rucio-Auth-Token')) > 32
 
-    def test_ssh_fail(self):
-        """AUTHENTICATION (REST): SSH RSA public key exchange (wrong credentials)."""
+    del_account_identity(PUBLIC_KEY, IdentityType.SSH, root)
 
-        root = InternalAccount('root', **self.vo)
-        try:
-            add_account_identity(PUBLIC_KEY, IdentityType.SSH, root, email='ph-adp-ddm-lab@cern.ch')
-        except Duplicate:
-            pass  # might already exist, can skip
 
-        signature = ssh_sign(PRIVATE_KEY, 'sign_something_else')
+def test_ssh_fail(vo, rest_client):
+    """AUTHENTICATION (REST): SSH RSA public key exchange (wrong credentials)."""
 
-        options = []
-        headers = {'X-Rucio-Account': 'root', 'X-Rucio-SSH-Signature': signature}
-        headers.update(self.vo_header)
-        result = TestApp(APP.wsgifunc(*options)).get('/ssh', headers=headers, expect_errors=True)
-        assert_equal(result.status, 401)
+    root = InternalAccount('root', vo=vo)
+    try:
+        add_account_identity(PUBLIC_KEY, IdentityType.SSH, root, email='ph-adp-ddm-lab@cern.ch')
+    except Duplicate:
+        pass  # might already exist, can skip
 
-        del_account_identity(PUBLIC_KEY, IdentityType.SSH, root)
+    signature = ssh_sign(PRIVATE_KEY, 'sign_something_else')
 
-    def test_saml_success(self):
-        """AUTHENTICATION (REST): SAML Username and password (correct credentials)."""
-        options = []
+    headers_dict = {'X-Rucio-Account': 'root', 'X-Rucio-SSH-Signature': signature}
+    response = rest_client.get('/auth/ssh', headers=headers(hdrdict(headers_dict), vohdr(vo)))
+    assert response.status_code == 401
 
-        headers = {'X-Rucio-Account': 'root'}
-        headers.update(self.vo_header)
-        userpass = {'username': 'ddmlab', 'password': 'secret'}
+    del_account_identity(PUBLIC_KEY, IdentityType.SSH, root)
 
-        result = TestApp(APP.wsgifunc(*options)).get('/saml', headers=headers, expect_errors=True)
-        try:
-            if not result.header('X-Rucio-Auth-Token'):
-                SAML_auth_url = result.header('X-Rucio-SAML-Auth-URL')
-                result = session().post(SAML_auth_url, data=userpass, verify=False, allow_redirects=True)
-                result = TestApp(APP.wsgifunc(*options)).get('/saml', headers=headers, expect_errors=True)
 
-            assert_equal(result.status, 200)
-            assert_greater(len(result.header('X-Rucio-Auth-Token')), 32)
-        except:
-            # FIXME: The WebUI isn't linked to CERN SSO yet so this needs to be fixed once it is linked
-            pass
+@pytest.mark.xfail(reason='The WebUI isn\'t linked to CERN SSO yet so this needs to be fixed once it is linked')
+def test_saml_success(vo, rest_client):
+    """AUTHENTICATION (REST): SAML Username and password (correct credentials)."""
+    headers_dict = {'X-Rucio-Account': 'root'}
+    userpass = {'username': 'ddmlab', 'password': 'secret'}
 
-    def test_saml_fail(self):
-        """AUTHENTICATION (REST): SAML Username and password (wrong credentials)."""
-        options = []
+    response = rest_client.get('/auth/saml', headers=headers(hdrdict(headers_dict), vohdr(vo)))
+    if not response.headers.get('X-Rucio-Auth-Token'):
+        SAML_auth_url = response.headers.get('X-Rucio-SAML-Auth-URL')
+        response = session().post(SAML_auth_url, data=userpass, verify=False, allow_redirects=True)
+        response = rest_client.get('/auth/saml', headers=headers(hdrdict(headers_dict)))
 
-        headers = {'X-Rucio-Account': 'root'}
-        headers.update(self.vo_header)
-        userpass = {'username': 'ddmlab', 'password': 'not_secret'}
+    assert response.status_code == 200
+    assert 'X-Rucio-Auth-Token' in response.headers
+    assert len(response.headers.get('X-Rucio-Auth-Token')) > 32
 
-        result = TestApp(APP.wsgifunc(*options)).get('/saml', headers=headers, expect_errors=True)
-        try:
-            if not result.header('X-Rucio-Auth-Token'):
-                SAML_auth_url = result.header('X-Rucio-SAML-Auth-URL')
-                result = session().post(SAML_auth_url, data=userpass, verify=False, allow_redirects=True)
-                result = TestApp(APP.wsgifunc(*options)).get('/saml', headers=headers, expect_errors=True)
 
-            assert_equal(result.status, 401)
-        except:
-            # FIXME: The WebUI isn't linked to CERN SSO yet so this needs to be fixed once it is linked
-            pass
+@pytest.mark.xfail(reason='The WebUI isn\'t linked to CERN SSO yet so this needs to be fixed once it is linked')
+def test_saml_fail(vo, rest_client):
+    """AUTHENTICATION (REST): SAML Username and password (wrong credentials)."""
+    headers_dict = {'X-Rucio-Account': 'root'}
+    userpass = {'username': 'ddmlab', 'password': 'not_secret'}
+
+    response = rest_client.get('/auth/saml', headers=headers(hdrdict(headers_dict), vohdr(vo)))
+    if not response.headers.get('X-Rucio-Auth-Token'):
+        SAML_auth_url = response.headers.get('X-Rucio-SAML-Auth-URL')
+        response = session().post(SAML_auth_url, data=userpass, verify=False, allow_redirects=True)
+        response = rest_client.get('/auth/saml', headers=headers(hdrdict(headers_dict)))
+
+    assert response.status_code == 401

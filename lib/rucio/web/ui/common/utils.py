@@ -1,36 +1,44 @@
-#!/usr/bin/env python
-# Copyright European Organization for Nuclear Research (CERN)
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# Copyright 2014-2020 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
-# You may not use this file except in compliance with the License.
-# You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 #
 # Authors:
-# - Thomas Beermann, <thomas.beermann@cern.ch>, 2014-2020
-# - Ruturaj Gujar, <ruturaj.gujar23@gmail.com>, 2019
-# - Jaroslav Guenther, <jaroslav.guenther@cern.ch>, 2019-2020
-# - Eli Chadwick, <eli.chadwick@stfc.ac.uk>, 2020
+# - Thomas Beermann <thomas.beermann@cern.ch>, 2014-2020
+# - Mario Lassnig <mario.lassnig@cern.ch>, 2014-2020
+# - Vincent Garonne <vincent.garonne@cern.ch>, 2015
+# - Martin Barisits <martin.barisits@cern.ch>, 2016-2020
+# - Ruturaj Gujar <ruturaj.gujar23@gmail.com>, 2019
+# - Jaroslav Guenther <jaroslav.guenther@cern.ch>, 2019-2020
+# - Eli Chadwick <eli.chadwick@stfc.ac.uk>, 2020
 # - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020
-#
-# PY3K COMPATIBLE
-#
-# TO-DO !!! Remove passing data with account and other params to the functions
-# catch these from the webpy input() storage object
-# will allow to remove also lines around each use of select_account_name
+# - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
 
 import re
 import sys
 from json import dumps, load
 from os.path import dirname, join
 from time import time
+
 from web import cookies, ctx, input, setcookie, template, seeother
 
 from rucio import version
 from rucio.api import authentication as auth, identity
-from rucio.api.account import get_account_info, list_account_attributes
-from rucio.common.config import config_get
-from rucio.db.sqla.constants import AccountType
-
+from rucio.api.account import account_exists, get_account_info, list_account_attributes
+from rucio.common.config import config_get, config_get_bool
+from rucio.core import identity as identity_core, vo as vo_core
+from rucio.db.sqla.constants import AccountType, IdentityType
 
 if sys.version_info > (3, 0):
     long = int
@@ -39,11 +47,10 @@ if sys.version_info > (3, 0):
 escapefunc = None
 try:
     import html
-    escapefunc = html.escape
+    escapefunc = html.escape  # noqa: E1101
 except ImportError:
     import cgi
-    escapefunc = cgi.escape
-
+    escapefunc = cgi.escape  # noqa: E1101
 
 try:
     from onelogin.saml2.auth import OneLogin_Saml2_Auth
@@ -73,16 +80,24 @@ if not AUTH_TYPE:
     except:
         AUTH_ISSUERS = []
 
+MULTI_VO = config_get_bool('common', 'multi_vo', raise_exception=False, default=False)
+
+# Additional error message that can have VO specific information for the user, e.g., support mailing list.
+ADDITIONAL_ERROR_MSG = config_get("webui", "additional_error_msg", raise_exception=False, default="")
 
 # excluded characters for injected JavaScript variables
 VARIABLE_VALUE_REGEX = re.compile(r"^[\w\- /=,.+*#()\[\]]*$", re.UNICODE)
+
+# TO-DO !!! Remove passing data with account and other params to the functions
+# catch these from the webpy input() storage object
+# will allow to remove also lines around each use of select_account_name
 
 
 def html_escape(s, quote=True):
     return escapefunc(s, quote)
 
 
-def prepare_webpy_request(request, data):
+def prepare_saml_request(request, data):
     """
     Prepare a webpy request for SAML
     :param request: webpy request object
@@ -139,17 +154,32 @@ def __to_js(var, value):
     return '<script type="text/javascript">var %s = "%s";</script>' % (var, value)
 
 
-def select_account_name(identitystr, identity_type):
+def select_account_name(identitystr, identity_type, vo=None):
     """
-    Looks for account corresponding to the provided identity.
+    Looks for account (and VO if not known) corresponding to the provided identity.
     :param identitystr: identity string
     :param identity_type: identity_type e.g. x509, saml, oidc, userpass
-    :returns: None or account string
+    :returns: Tuple of None or account string, None or VO string or list of VO strings
     """
-    accounts = identity.list_accounts_for_identity(identitystr, identity_type)
     ui_account = None
+    if not MULTI_VO:
+        vo = 'def'
+    if vo is not None:
+        accounts = identity.list_accounts_for_identity(identitystr, identity_type)
+    else:
+        internal_accounts = identity_core.list_accounts_for_identity(identitystr, IdentityType[identity_type])
+        accounts = [account.external for account in internal_accounts]
+        vos = [account.vo for account in internal_accounts]
+        if vos:
+            vos = list(set(vos))
+            # If we only have 1 VO that matches the identity use that, otherwise return all possible VOs so the user can choose
+            if len(vos) == 1:
+                vo = vos[0]
+            else:
+                return None, vos
+
     if len(accounts) == 0:
-        return None
+        return None, vo
     # check if ui_account param is set
     if 'ui_account' in input():
         ui_account = input()['ui_account']
@@ -158,14 +188,14 @@ def select_account_name(identitystr, identity_type):
         ui_account = input()['account']
     if ui_account:
         if ui_account not in accounts:
-            return None
+            return None, vo
         else:
-            return ui_account
+            return ui_account, vo
     else:
         # try to set the default account to the user account, if not available take the first account.
         def_account = accounts[0]
         for account in accounts:
-            account_info = get_account_info(account)
+            account_info = get_account_info(account, vo=vo)
             if account_info.account_type == AccountType.USER:
                 def_account = account
                 break
@@ -173,7 +203,7 @@ def select_account_name(identitystr, identity_type):
         if (selected_account):
             def_account = selected_account
         ui_account = def_account
-    return ui_account
+    return ui_account, vo
 
 
 def get_token(token_method, acc=None, vo=None, idt=None, pwd=None):
@@ -230,10 +260,11 @@ def access_granted(valid_token_dict, rendered_tpl=None):
     :returns: rendered base temmplate with rendered_tpl content
     """
     js_account = __to_js('account', valid_token_dict['account'])
+    js_vo = __to_js('vo', valid_token_dict['vo'])
     js_token = __to_js('token', valid_token_dict['token'])
     rucio_ui_version = version.version_string()
     policy = config_get('policy', 'permission')
-    return RENDERER.base(js_token, js_account, rucio_ui_version, policy, rendered_tpl)
+    return RENDERER.base(js_token, js_account, js_vo, MULTI_VO, rucio_ui_version, policy, rendered_tpl)
 
 
 def finalize_auth(token, identity_type, cookie_dict_extra=None):
@@ -249,7 +280,7 @@ def finalize_auth(token, identity_type, cookie_dict_extra=None):
     if not valid_token_dict:
         return RENDERER.problem("It was not possible to validate and finalize your login with the provided token.")
     try:
-        attribs = list_account_attributes(valid_token_dict['account'])
+        attribs = list_account_attributes(valid_token_dict['account'], valid_token_dict['vo'])
         accounts = identity.list_accounts_for_identity(valid_token_dict['identity'], identity_type)
         accvalues = ""
         for acc in accounts:
@@ -261,13 +292,28 @@ def finalize_auth(token, identity_type, cookie_dict_extra=None):
                        'rucio-auth-token-created-at': long(time()),
                        'rucio-available-accounts': accounts,
                        'rucio-account-attr': dumps(attribs),
-                       'rucio-selected-account': valid_token_dict['account']}
+                       'rucio-selected-account': valid_token_dict['account'],
+                       'rucio-selected-vo': valid_token_dict['vo']}
         if cookie_dict_extra and isinstance(cookie_dict_extra, dict):
             cookie_dict.update(cookie_dict_extra)
         set_cookies(cookie_dict)
         return redirect_to_last_known_url()
     except:
         return RENDERER.problem("It was not possible to validate and finalize your login with the provided token.")
+
+
+def get_vo_descriptions(vos):
+    """
+    Gets the description for each VO in the list.
+    :param vos: List of 3 character VO strings
+    :returns: List of tuples containing VO string, VO description
+    """
+    all_vos = vo_core.list_vos()
+    vos_with_desc = []
+    for vo in all_vos:
+        if vo['vo'] in vos:
+            vos_with_desc.append((vo['vo'], vo['description']))
+    return vos_with_desc
 
 
 # AUTH_TYPE SPECIFIC METHODS FOLLOW:
@@ -285,16 +331,58 @@ def x509token_auth(data=None):
     dn = ctx.env.get('SSL_CLIENT_S_DN')
     if not dn.startswith('/'):
         dn = '/%s' % '/'.join(dn.split(',')[::-1])
+    if not MULTI_VO:
+        ui_vo = 'def'
+    elif hasattr(data, 'vo') and data.vo:
+        ui_vo = data.vo
+    else:
+        ui_vo = None
     if hasattr(data, 'account') and data.account:
         ui_account = data.account
     else:
-        ui_account = select_account_name(dn, 'x509')
-    msg = "<br><br>Your certificate (%s) is not mapped to (possibly any) rucio account: %s." % (html_escape(dn), html_escape(ui_account))
-    msg += "<br><br><font color=\"red\">First, please make sure it is correctly registered in <a href=\"https://voms2.cern.ch:8443/voms/atlas\">VOMS</a> and be patient until it has been fully propagated through the system.</font>"
-    msg += "<br><br>Then, if it is still not working please contact <a href=\"mailto:atlas-adc-ddm-support@cern.ch\">DDM Support</a>."
+        ui_account = None
+
+    if ui_account is None and ui_vo is None:
+        ui_account, ui_vo = select_account_name(dn, 'x509', ui_vo)
+    elif ui_account is None:
+        ui_account, _ = select_account_name(dn, 'x509', ui_vo)
+    elif ui_vo is None:
+        _, ui_vo = select_account_name(dn, 'x509', ui_vo)
+
+    # Try to eliminate VOs based on the account name (if we have one), if we still have multiple options let the user select one
+    if type(ui_vo) is list:
+        if ui_account:
+            valid_vos = []
+            for vo in ui_vo:
+                if account_exists(ui_account, vo):
+                    valid_vos.append(vo)
+            if len(valid_vos) == 0:
+                return RENDERER.problem(('<br><br>Your certificate (%s) is not mapped to (possibly any) rucio account: %s at any VO.' % (html_escape(dn), html_escape(ui_account))))
+            elif len(valid_vos) == 1:
+                ui_vo = valid_vos[0]
+            else:
+                vos_with_desc = get_vo_descriptions(valid_vos)
+                return RENDERER.select_login_method(AUTH_ISSUERS, SAML_SUPPORT, vos_with_desc)
+        else:
+            vos_with_desc = get_vo_descriptions(ui_vo)
+            return RENDERER.select_login_method(AUTH_ISSUERS, SAML_SUPPORT, vos_with_desc)
+
+    if not ui_account:
+        if MULTI_VO:
+            msg = "<br><br>Your certificate (%s) is not mapped to (possibly any) rucio account at VO: %s." % (html_escape(dn), html_escape(ui_vo))
+        else:
+            msg = "<br><br>Your certificate (%s) is not mapped to (possibly any) rucio account." % (html_escape(dn))
+    else:
+        if MULTI_VO:
+            msg = "<br><br>Your certificate (%s) is not mapped to (possibly any) rucio account: %s at VO: %s." % (html_escape(dn), html_escape(ui_account), html_escape(ui_vo))
+        else:
+            msg = "<br><br>Your certificate (%s) is not mapped to (possibly any) rucio account: %s." % (html_escape(dn), html_escape(ui_account))
+
+    if ADDITIONAL_ERROR_MSG:
+        msg += ADDITIONAL_ERROR_MSG
     if not ui_account:
         return RENDERER.problem(msg)
-    token = get_token(auth.get_auth_token_x509, acc=ui_account, idt=dn)
+    token = get_token(auth.get_auth_token_x509, acc=ui_account, vo=ui_vo, idt=dn)
     if not token:
         return RENDERER.problem(msg)
     return finalize_auth(token, 'x509')
@@ -303,7 +391,7 @@ def x509token_auth(data=None):
 def userpass_auth(data, rendered_tpl):
     """
     Manages login via Rucio USERPASS method.
-    :param data: data object containing account, username and password string
+    :param data: data object containing account, VO (if multi_vo), username and password string
     :param rendered_tpl: rendered page template
     :returns: final page or a page with an error message
     """
@@ -313,15 +401,61 @@ def userpass_auth(data, rendered_tpl):
         # if user tries to access a page through URL without logging in, then redirect to login page.
         if rendered_tpl:
             return RENDERER.login(None)
+        if not MULTI_VO:
+            ui_vo = 'def'
+        elif hasattr(data, 'vo') and data.vo:
+            ui_vo = data.vo
+        else:
+            ui_vo = None
         if hasattr(data, 'account') and data.account:
             ui_account = data.account
         else:
-            ui_account = select_account_name(data.username, 'userpass')
+            ui_account = None
+
+        if ui_account is None and ui_vo is None:
+            ui_account, ui_vo = select_account_name(data.username, 'userpass', ui_vo)
+        elif ui_account is None:
+            ui_account, _ = select_account_name(data.username, 'userpass', ui_vo)
+        elif ui_vo is None:
+            _, ui_vo = select_account_name(data.username, 'userpass', ui_vo)
+
+        # Try to eliminate VOs based on the account name (if we have one), if we still have multiple options let the user select one
+        if type(ui_vo) is list:
+            if ui_account:
+                valid_vos = []
+                for vo in ui_vo:
+                    if account_exists(ui_account, vo):
+                        valid_vos.append(vo)
+
+                if len(valid_vos) == 0:
+                    return RENDERER.problem(('Cannot find any Rucio account %s associated with identity %s at any VO.' % (html_escape(ui_account), html_escape(data.username))))
+                elif len(valid_vos) == 1:
+                    ui_vo = valid_vos[0]
+                else:
+                    vos_with_desc = get_vo_descriptions(valid_vos)
+                    return RENDERER.login(ui_account, None, vos_with_desc)
+            else:
+                vos_with_desc = get_vo_descriptions(ui_vo)
+                return RENDERER.login(None, None, vos_with_desc)
+
         if not ui_account:
-            return RENDERER.problem(('Cannot get find any account associated with %s identity.' % (html_escape(data.username))))
-        token = get_token(auth.get_auth_token_user_pass, acc=ui_account, idt=data.username, pwd=data.password.encode("ascii"))
+            if MULTI_VO:
+                msg = 'Cannot get find any account associated with %s identity at VO %s.' % (html_escape(data.username), html_escape(ui_vo))
+            else:
+                msg = 'Cannot get find any account associated with %s identity.' % (html_escape(data.username))
+            if ADDITIONAL_ERROR_MSG:
+                msg += ADDITIONAL_ERROR_MSG
+            return RENDERER.problem(msg)
+        token = get_token(auth.get_auth_token_user_pass, acc=ui_account, vo=ui_vo, idt=data.username, pwd=data.password.encode("ascii"))
         if not token:
-            return RENDERER.problem(('Cannot get auth token. It is possible that the presented identity %s is not mapped to any Rucio account %s.') % (html_escape(data.username), html_escape(ui_account)))
+            if MULTI_VO:
+                msg = 'Cannot get auth token. It is possible that the presented identity %s is not mapped to any Rucio account %s at VO %s.' % (html_escape(data.username), html_escape(ui_account), html_escape(ui_vo))
+            else:
+                msg = 'Cannot get auth token. It is possible that the presented identity %s is not mapped to any Rucio account %s.' % (html_escape(data.username), html_escape(ui_account))
+            if ADDITIONAL_ERROR_MSG:
+                msg += ADDITIONAL_ERROR_MSG
+            return RENDERER.problem(msg)
+
     return finalize_auth(token, 'userpass')
 
 
@@ -334,25 +468,69 @@ def saml_auth(method, data=None):
     :returns: rendered final page or a page with error message
     """
     SAML_PATH = join(dirname(__file__), 'saml/')
-    req = prepare_webpy_request(ctx.env, dict(input()))
+    req = prepare_saml_request(ctx.env, dict(input()))
     samlauth = OneLogin_Saml2_Auth(req, custom_base_path=SAML_PATH)
     saml_user_data = cookies().get('saml-user-data')
-    ui_account = None
+    if not MULTI_VO:
+        ui_vo = 'def'
+    elif hasattr(data, 'vo') and data.vo:
+        ui_vo = data.vo
+    else:
+        ui_vo = None
     if hasattr(data, 'account') and data.account:
         ui_account = data.account
+    else:
+        ui_account = None
+
     if method == "GET":
         # If user data is not present, redirect to IdP for authentication
         if not saml_user_data:
             return seeother(samlauth.login())
         # If user data is present but token is not valid, create a new one
         saml_nameid = cookies().get('saml-nameid')
+        if ui_account is None and ui_vo is None:
+            ui_account, ui_vo = select_account_name(saml_nameid, 'saml', ui_vo)
+        elif ui_account is None:
+            ui_account, _ = select_account_name(saml_nameid, 'saml', ui_vo)
+        elif ui_vo is None:
+            _, ui_vo = select_account_name(saml_nameid, 'saml', ui_vo)
+
+        # Try to eliminate VOs based on the account name (if we have one), if we still have multiple options let the user select one
+        if type(ui_vo) is list:
+            if ui_account:
+                valid_vos = []
+                for vo in ui_vo:
+                    if account_exists(ui_account, vo):
+                        valid_vos.append(vo)
+                if len(valid_vos) == 0:
+                    return RENDERER.problem(('Cannot find any Rucio account %s associated with identity %s at any VO.' % (html_escape(ui_account), html_escape(saml_nameid))))
+                elif len(valid_vos) == 1:
+                    ui_vo = valid_vos[0]
+                else:
+                    vos_with_desc = get_vo_descriptions(valid_vos)
+                    return RENDERER.select_login_method(AUTH_ISSUERS, SAML_SUPPORT, vos_with_desc)
+            else:
+                vos_with_desc = get_vo_descriptions(ui_vo)
+                return RENDERER.select_login_method(AUTH_ISSUERS, SAML_SUPPORT, vos_with_desc)
+
         if not ui_account:
-            ui_account = select_account_name(saml_nameid, 'saml')
-        if not ui_account:
-            return RENDERER.problem('Cannot get find any account associated with %s identity.' % (html_escape(saml_nameid)))
-        token = get_token(auth.get_auth_token_saml, acc=ui_account, idt=saml_nameid)
+            if MULTI_VO:
+                msg = 'Cannot get find any account associated with %s identity at VO %s.' % (html_escape(saml_nameid), html_escape(ui_vo))
+            else:
+                msg = 'Cannot get find any account associated with %s identity.' % (html_escape(saml_nameid))
+            if ADDITIONAL_ERROR_MSG:
+                msg += ADDITIONAL_ERROR_MSG
+            return RENDERER.problem(msg)
+
+        token = get_token(auth.get_auth_token_saml, acc=ui_account, vo=ui_vo, idt=saml_nameid)
         if not token:
-            return RENDERER.problem(('Cannot get auth token. It is possible that the presented identity %s is not mapped to any Rucio account %s.') % (html_escape(saml_nameid), html_escape(ui_account)))
+            if MULTI_VO:
+                msg = 'Cannot get auth token. It is possible that the presented identity %s is not mapped to any Rucio account %s at VO %s.' % (html_escape(saml_nameid), html_escape(ui_account), html_escape(ui_vo))
+            else:
+                msg = 'Cannot get auth token. It is possible that the presented identity %s is not mapped to any Rucio account %s.' % (html_escape(saml_nameid), html_escape(ui_account))
+            if ADDITIONAL_ERROR_MSG:
+                msg += ADDITIONAL_ERROR_MSG
+            return RENDERER.problem(msg)
         return finalize_auth(token, 'saml')
 
     # If method is POST, check the received SAML response and redirect to home if valid
@@ -366,13 +544,48 @@ def saml_auth(method, data=None):
             cookie_extra['saml-session-index'] = samlauth.get_session_index()
             # WHY THIS ATTEMPTS TO GET A NEW TOKEN ?
             # WE SHOULD HAVE IT/GET IT FROM COOKIE OR DB AND JUST REDIRECT, NO ?
+            if ui_account is None and ui_vo is None:
+                ui_account, ui_vo = select_account_name(saml_nameid, 'saml', ui_vo)
+            elif ui_account is None:
+                ui_account, _ = select_account_name(saml_nameid, 'saml', ui_vo)
+            elif ui_vo is None:
+                _, ui_vo = select_account_name(saml_nameid, 'saml', ui_vo)
+
+            # Try to eliminate VOs based on the account name (if we have one), if we still have multiple options let the user select one
+            if type(ui_vo) is list:
+                if ui_account:
+                    valid_vos = []
+                    for vo in ui_vo:
+                        if account_exists(ui_account, vo):
+                            valid_vos.append(vo)
+                    if len(valid_vos) == 0:
+                        return RENDERER.problem(('Cannot find any Rucio account %s associated with identity %s at any VO.' % (html_escape(ui_account), html_escape(saml_nameid))))
+                    elif len(valid_vos) == 1:
+                        ui_vo = valid_vos[0]
+                    else:
+                        vos_with_desc = get_vo_descriptions(valid_vos)
+                        return RENDERER.select_login_method(AUTH_ISSUERS, SAML_SUPPORT, vos_with_desc)
+                else:
+                    vos_with_desc = get_vo_descriptions(ui_vo)
+                    return RENDERER.select_login_method(AUTH_ISSUERS, SAML_SUPPORT, vos_with_desc)
+
             if not ui_account:
-                ui_account = select_account_name(saml_nameid, 'saml')
-            if not ui_account:
-                return RENDERER.problem('Cannot get find any account associated with %s identity.' % (html_escape(saml_nameid)))
-            token = get_token(auth.get_auth_token_saml, acc=ui_account, idt=saml_nameid)
+                if MULTI_VO:
+                    msg = 'Cannot get find any account associated with %s identity at VO %s.' % (html_escape(saml_nameid), html_escape(ui_vo))
+                else:
+                    msg = 'Cannot get find any account associated with %s identity.' % (html_escape(saml_nameid))
+                if ADDITIONAL_ERROR_MSG:
+                    msg += ADDITIONAL_ERROR_MSG
+                return RENDERER.problem(msg)
+            token = get_token(auth.get_auth_token_saml, acc=ui_account, vo=ui_vo, idt=saml_nameid)
             if not token:
-                return RENDERER.problem(('Cannot get auth token. It is possible that the presented identity %s is not mapped to any Rucio account %s.') % (html_escape(saml_nameid), html_escape(ui_account)))
+                if MULTI_VO:
+                    msg = 'Cannot get auth token. It is possible that the presented identity %s is not mapped to any Rucio account %s at VO %s.' % (html_escape(saml_nameid), html_escape(ui_account), html_escape(ui_vo))
+                else:
+                    msg = 'Cannot get auth token. It is possible that the presented identity %s is not mapped to any Rucio account %s.' % (html_escape(saml_nameid), html_escape(ui_account))
+                if ADDITIONAL_ERROR_MSG:
+                    msg += ADDITIONAL_ERROR_MSG
+                return RENDERER.problem(msg)
             return finalize_auth(token, 'saml', cookie_extra)
 
         return RENDERER.problem("Not authenticated")
@@ -380,16 +593,30 @@ def saml_auth(method, data=None):
     return RENDERER.problem("Error while processing SAML")
 
 
-def oidc_auth(account, issuer):
+def oidc_auth(account, issuer, ui_vo=None):
     """
     Open ID Connect Login
     :param account: Rucio account string
     :param issuer: issuer key (e.g. xdc, wlcg) as in the idpsecrets.json file
+    :param ui_vo: 3 character string to identify the VO, if None will attempt to deduce it from `account`
     :returns: rendered final page or a page with error message
     """
-
     if not account:
         account = 'webui'
+    if ui_vo is None:
+        all_vos = [vo['vo'] for vo in vo_core.list_vos()]
+        valid_vos = []
+        for vo in all_vos:
+            if account_exists(account, vo):
+                valid_vos.append(vo)
+        if len(valid_vos) == 0:
+            return RENDERER.problem(('Cannot find any Rucio account %s at any VO.' % html_escape(account)))
+        elif len(valid_vos) == 1:
+            ui_vo = valid_vos[0]
+        else:
+            vos_with_desc = get_vo_descriptions(valid_vos)
+            return RENDERER.select_login_method(AUTH_ISSUERS, SAML_SUPPORT, vos_with_desc)
+
     if not issuer:
         return RENDERER.problem("Please provide IdP issuer.")
     kwargs = {'audience': None,
@@ -400,7 +627,7 @@ def oidc_auth(account, issuer):
               'refresh_lifetime': None,
               'ip': None,
               'webhome': ctx.realhome + '/oidc_final'}
-    auth_url = auth.get_auth_oidc(account, **kwargs)
+    auth_url = auth.get_auth_oidc(account, vo=ui_vo, **kwargs)
     if not auth_url:
         return RENDERER.problem("It was not possible to get the OIDC authentication url from the Rucio auth server. "
                                 + "In case you provided your account name, make sure it is known to Rucio.")   # NOQA: W503
@@ -423,7 +650,7 @@ def authenticate(rendered_tpl):
 
     # login without any known server config
     if not AUTH_TYPE:
-        return RENDERER.select_login_method(AUTH_ISSUERS, SAML_SUPPORT)
+        return RENDERER.select_login_method(AUTH_ISSUERS, SAML_SUPPORT, None)
     # for AUTH_TYPE predefined by the server continue
     else:
         if AUTH_TYPE == 'userpass':

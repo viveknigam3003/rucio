@@ -1,4 +1,5 @@
-# Copyright 2012-2020 CERN for the benefit of the ATLAS collaboration.
+# -*- coding: utf-8 -*-
+# Copyright 2020-2021 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,17 +14,14 @@
 # limitations under the License.
 #
 # Authors:
-# - Aristeidis Fkiaras <aristeidis.fkiaras@cern.ch>, 2019 - 2020
-#
-# PY3K COMPATIBLE
+# - Aristeidis Fkiaras <aristeidis.fkiaras@cern.ch>, 2020
+# - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020-2021
 
 import importlib
 
 from rucio.common import config
-from rucio.common.exception import PolicyPackageNotFound
+from rucio.common.exception import PolicyPackageNotFound, InvalidMetadata
 from rucio.db.sqla.session import read_session
-
-# from . import hardcoded as hardcoded_handler
 
 try:
     from ConfigParser import NoOptionError, NoSectionError
@@ -36,7 +34,7 @@ FALLBACK_METADATA_HANDLER_MODULE = "rucio.core.did_meta_plugins.json_meta.JSONDi
 if config.config_has_section('metadata'):
     try:
         METADATA_HANDLER_MODULES = config.config_get('metadata', 'plugins')
-    except (NoOptionError, NoSectionError) as error:
+    except (NoOptionError, NoSectionError):
         METADATA_HANDLER_MODULES = FALLBACK_METADATA_HANDLER_MODULE
 else:
     METADATA_HANDLER_MODULES = FALLBACK_METADATA_HANDLER_MODULE
@@ -50,7 +48,7 @@ for meta_module_path in META_MODULE_PATHS:
         base_class = meta_module_path.split(".")[-1]
         meta_handler_module = getattr(importlib.import_module(base_module), base_class)()
         METADATA_HANDLERS.append(meta_handler_module)
-    except (ImportError) as error:
+    except ImportError:
         raise PolicyPackageNotFound('Module ' + meta_module_path + ' not found')
 
 
@@ -94,14 +92,59 @@ def set_metadata(scope, name, key, value, recursive=False, session=None):
     :param name: The name of the did.
     :param key: Key of the metadata.
     :param value: Value of the metadata.
-    :param did: (Optional) The data identifier info.
     :param recursive: (Optional) Option to propagate the metadata change to content.
-    :param session: (Optional)  The database session in use.
+    :param session: (Optional) The database session in use.
     """
+    meta_was_set = False
     for meta_handler in METADATA_HANDLERS:
-        if meta_handler.manages_key(key):
+        if meta_handler.manages_key(key, session=session):
             meta_handler.set_metadata(scope, name, key, value, recursive, session=session)
+            meta_was_set = True
             break
+
+    if not meta_was_set:
+        raise InvalidMetadata('No plugin accepts metadata key %s on DID %s:%s' % (key, scope, name))
+
+
+def set_metadata_bulk(scope, name, meta, recursive=False, session=None):
+    """
+    Sets the metadata for a given did.
+
+    To decide which metadata store to use, it is checking the
+    configuration of the server and assigns each key-value to the
+    correct plugin by checking them in order of METADATA_HANDLERS.
+
+    :param scope: The scope name.
+    :param name: The data identifier name.
+    :param meta: The key-value mapping of metadata to set.
+    :param recursive: (Optional) Option to propagate the metadata change to content.
+    :param session: (Optional) The database session in use.
+    """
+    denied_keys = list()
+    if not isinstance(meta, dict):
+        # always convert to dict, so that .items() can be called
+        meta = dict(meta)
+    meta_handler_keys = {meta_handler: [] for meta_handler in METADATA_HANDLERS}
+
+    for key, value in meta.items():
+        meta_is_included = False
+        # using METADATA_HANDLERS here to ensure the order of plugins applied
+        for meta_handler in METADATA_HANDLERS:
+            if meta_handler.manages_key(key, session=session):
+                meta_handler_keys[meta_handler].append(key)
+                meta_is_included = True
+                break
+
+        if not meta_is_included:
+            denied_keys.append(key)
+
+    if denied_keys:
+        raise InvalidMetadata('No plugin accepted metadata keys %s on DID %s:%s' % (denied_keys, scope, name))
+
+    for meta_handler, key_list in meta_handler_keys.items():
+        if key_list:
+            pluginmeta = {key: meta[key] for key in key_list}
+            meta_handler.set_metadata_bulk(scope, name, meta=pluginmeta, recursive=recursive, session=session)
 
 
 def delete_metadata(scope, name, key, session=None):
@@ -113,7 +156,7 @@ def delete_metadata(scope, name, key, session=None):
     :param key: Key of the metadata.
     """
     for meta_handler in METADATA_HANDLERS:
-        if meta_handler.manages_key(key):
+        if meta_handler.manages_key(key, session=session):
             meta_handler.delete_metadata(scope, name, key, session=session)
 
 
@@ -145,11 +188,11 @@ def list_dids(scope=None, filters=None, type='collection', ignore_case=False, li
             continue
         if meta_handler_to_use is None:
             for meta_handler in METADATA_HANDLERS:
-                if meta_handler.manages_key(key):
+                if meta_handler.manages_key(key, session=session):
                     meta_handler_to_use = meta_handler
                     break
         else:
-            if not meta_handler_to_use.manages_key(key):
+            if not meta_handler_to_use.manages_key(key, session=session):
                 # Mix case, difficult, slow and will probably blow up memory
                 raise NotImplementedError('Filter keys used do not all belong on the same metadata plugin.')
 

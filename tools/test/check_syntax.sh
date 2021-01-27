@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright 2018-2020 CERN for the benefit of the ATLAS collaboration.
+# Copyright 2018-2020 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,39 +17,58 @@
 # - Vincent Garonne <vgaronne@gmail.com>, 2018
 # - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020
 
+if [ -z "$SYNTAX_FLAKE_ARGS" ]; then
+    SYNTAX_FLAKE_ARGS="--exclude=\"*.cfg\" bin/* lib/ tools/*.py"
+fi
+
+if [ -z "$SYNTAX_PYLINT_ARGS" ]; then
+    SYNTAX_PYLINT_ARGS="--ignore=lib/rucio/tests,lib/rucio/tests/mock lib/rucio/"
+fi
+
+if [ -z "$SYNTAX_PYLINT_BIN_ARGS" ]; then
+    SYNTAX_PYLINT_BIN_ARGS="bin/*"
+fi
+
+
 echo '==============================='
 echo 'Running flake8                 '
 echo '==============================='
 
-flake8 --ignore=E501,E722,W503 --exclude="*.cfg" bin/* lib/ tools/*.py
+flake8 --ignore=E501,E722,W503 $SYNTAX_FLAKE_ARGS
 
 if [ $? -ne 0 ]; then
     exit 1
 fi
+
 
 echo '==============================='
 echo 'Running pylint                 '
 echo '==============================='
 
-pylint --rcfile=pylintrc `cat changed_files.txt` > pylint.out
-
-if [ $(($? & 3)) -ne 0 ]; then
-    echo "PYLINT FAILED"
-    cat pylint.out
-    exit 1
-else
-    echo "PYLINT PASSED"
-    tail -n 3 pylint.out
-fi
-
-# 2to3 --no-diffs lib/rucio  2>&1 |grep 'RefactoringTool: Refactored'|wc
-
-echo '==============================='
-echo 'Running Sphinx                 '
-echo '==============================='
-
-RUCIO_HOME=/usr/local/src/rucio sphinx-build -avT doc/source/ doc/build/html
+pylint --rcfile=pylintrc --errors-only $SYNTAX_PYLINT_ARGS
 
 if [ $? -ne 0 ]; then
+    echo "PYLINT on $SYNTAX_PYLINT_ARGS FAILED"
     exit 1
+else
+    echo "PYLINT on $SYNTAX_PYLINT_ARGS PASSED"
+fi
+
+# disable no-name-in-module since bin/rucio clashes with lib/rucio
+PYTHONPATH=lib pylint --rcfile=pylintrc --errors-only --disable no-name-in-module $SYNTAX_PYLINT_BIN_ARGS
+
+if [ $? -ne 0 ]; then
+    echo "PYLINT on $SYNTAX_PYLINT_BIN_ARGS FAILED"
+    exit 1
+else
+    echo "PYLINT on $SYNTAX_PYLINT_BIN_ARGS PASSED"
+fi
+
+
+if [[ "$SYNTAX_REPORT" && "$SYNTAX_REPORT" == "1" ]]; then
+    echo '==============================='
+    echo 'Pylint report                  '
+    echo '==============================='
+
+    pylint --rcfile=pylintrc --reports y --exit-zero $SYNTAX_PYLINT_ARGS
 fi

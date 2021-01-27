@@ -1,4 +1,5 @@
-# Copyright 2019 CERN for the benefit of the ATLAS collaboration.
+# -*- coding: utf-8 -*-
+# Copyright 2019-2020 CERN
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,12 +14,12 @@
 # limitations under the License.
 #
 # Authors:
-# - Dilaksun Bavarajan <dilaksun@hotmail.com>, 2019
+# - Dilaksun Bavarajan <dilaksun.bavarajan@cern.ch>, 2019
 # - Martin Barisits <martin.barisits@cern.ch>, 2019
-# - Brandon White <bjwhite@fnal.gov>, 2019-2020
+# - Brandon White <bjwhite@fnal.gov>, 2019
 # - Thomas Beermann <thomas.beermann@cern.ch>, 2020
-#
-# PY3K COMPATIBLE
+# - Benedikt Ziemons <benedikt.ziemons@cern.ch>, 2020
+# - Mario Lassnig <mario.lassnig@cern.ch>, 2020
 
 """
 Conveyor FTS Throttler is a daemon that will configure a fts storage's transfer settings
@@ -28,18 +29,20 @@ alleviated by limiting the transfer settings of FTS transfers on the particular 
 """
 from __future__ import division
 
+import datetime
+import json
 import logging
-import sys
-import threading
 import os
 import socket
+import sys
+import threading
 import time
 import traceback
-import json
-import datetime
+
 import requests
 
-
+import rucio.db.sqla.util
+from rucio.common import exception
 from rucio.common.config import config_get
 from rucio.core import heartbeat
 from rucio.transfertool.fts3 import FTS3Transfertool
@@ -69,13 +72,13 @@ class FTSThrottler(object):
             try:
                 cycle_file = config_get('conveyor', 'fts_throttler_cycle')
             except Exception:
-                logging.warn('could not get the cycle file, cannot perform tuning for this cycle without cycle file, returning')
+                logging.warning('could not get the cycle file, cannot perform tuning for this cycle without cycle file, returning')
                 return
 
             try:
                 tuning_ratio = config_get('conveyor', 'fts_throttler_tuning_ratio')
             except Exception:
-                logging.warn('could not get the tuning ratio from config, returning')
+                logging.warning('could not get the tuning ratio from config, returning')
                 return
 
             rses = result['aggregations']['rse']['buckets']
@@ -107,7 +110,7 @@ class FTSThrottler(object):
                         se = t.get_se_config(url)
                         logging.info('storage settings: %s', se)
                     except KeyError:
-                        logging.warn('configuration for storage element was not found, config will be set from default values')
+                        logging.warning('configuration for storage element was not found, config will be set from default values')
                         # all FTS Host servers have a default reference storage named '*' that holds the default values for all storages that arent listed yet.
                         default_storage = t.get_se_config('*')
                         t.set_se_config(url, inbound_max_active=int((100 / (100 + n)) * default_storage['se_info']['inbound_max_active']),
@@ -124,8 +127,8 @@ class FTSThrottler(object):
                                                             'fts-host': rse_info[1], 'time': str(datetime.datetime.now())})
                         continue
                     except Exception as error:
-                        logging.warn('an error occured when trying to get the storage configuration')
-                        logging.warn(str(error))
+                        logging.warning('an error occured when trying to get the storage configuration')
+                        logging.warning(str(error))
                         continue
 
                     # Even though we could read the config, we still need to know if the important attributes are empty.
@@ -164,7 +167,7 @@ class FTSThrottler(object):
             with open(cycle_file, 'w') as outfile:
                 json.dump(cycle_info_dict, outfile)
         else:
-            logging.warn('Could not detect any storages with sufficient failure ratio for tuning, trying again next cycle')
+            logging.warning('Could not detect any storages with sufficient failure ratio for tuning, trying again next cycle')
         return
 
     def revert(self):
@@ -177,7 +180,7 @@ class FTSThrottler(object):
         try:
             cycle_file = config_get('conveyor', 'fts_throttler_cycle')
         except Exception:
-            logging.warn('could not get the cycle file, cannot revert cycle changes, therefor no tuning either')
+            logging.warning('could not get the cycle file, cannot revert cycle changes, therefor no tuning either')
             return False
 
         with open(cycle_file) as cycle_info:
@@ -312,7 +315,7 @@ class FTSThrottler(object):
                                   timeout=None)
 
         except Exception:
-            logging.warn('could not retrieve transfer failure data from %s - %s', kserver, str(traceback.format_exc()))
+            logging.warning('could not retrieve transfer failure data from %s - %s', kserver, str(traceback.format_exc()))
         if result and result.status_code == 200:
             return result.json()
         raise Exception('could not get result from %s, status code returned : %s', kserver, result.status_code if result else None)
@@ -344,15 +347,15 @@ class FTSThrottler(object):
                         se = t.get_se_config(url)
                         logging.info('storage settings: %s', se)
                     except KeyError:
-                        logging.warn('configuration for storage element was not found')
+                        logging.warning('configuration for storage element was not found')
                     except Exception as error:
-                        logging.warn('an error occured when trying to get the storage configuration')
-                        logging.warn(str(error))
+                        logging.warning('an error occured when trying to get the storage configuration')
+                        logging.warning(str(error))
                         continue
 
             return rses
         else:
-            logging.warn('Could not retrieve timeout data with elastic search, trying again next cycle')
+            logging.warning('Could not retrieve timeout data with elastic search, trying again next cycle')
 
 
 def fts_throttler(once=False, cycle_interval=3600):
@@ -391,7 +394,7 @@ def fts_throttler(once=False, cycle_interval=3600):
                         FTSThrottler().tune()
                         logging.info('Tuning finished for this cycle')
                     else:
-                        logging.warn('could not revert, cannot tune unless revert has been done, will try again next cycle.')
+                        logging.warning('could not revert, cannot tune unless revert has been done, will try again next cycle.')
 
                     if once:
                         break
@@ -418,7 +421,7 @@ def fts_throttler(once=False, cycle_interval=3600):
         try:
             FTSThrottler().revert()
         except Exception:
-            logging.warn('could not revert changes before stopping')
+            logging.warning('could not revert changes before stopping')
 
     heartbeat.die(executable, hostname, pid, hb_thread)
 
@@ -437,6 +440,8 @@ def run(once=False, cycle_interval=3600):
     """
     Starts up the conveyer fts throttler thread.
     """
+    if rucio.db.sqla.util.is_old_db():
+        raise exception.DatabaseException('Database was not updated, daemon won\'t start')
 
     logging.info('starting throttler thread')
     fts_throttler_thread = threading.Thread(target=fts_throttler, kwargs={'once': once, 'cycle_interval': cycle_interval})

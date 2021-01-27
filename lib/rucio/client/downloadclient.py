@@ -220,9 +220,7 @@ class DownloadClient:
                 raise InputValidationError('Cannot use PFN download with wildcard in DID')
 
             did_scope, did_name = self._split_did_str(did_str)
-            dest_dir_path = self._prepare_dest_dir(item.get('base_dir', '.'),
-                                                   did_scope, did_name,
-                                                   item.get('no_subdir'))
+            dest_dir_path = self._prepare_dest_dir(item.get('base_dir', '.'), did_scope, item.get('no_subdir'))
 
             item['scope'] = did_scope
             item['name'] = did_name
@@ -453,6 +451,8 @@ class DownloadClient:
         trace.setdefault('datasetScope', item.get('dataset_scope', ''))
         trace.setdefault('dataset', item.get('dataset_name', ''))
         trace.setdefault('filesize', item.get('bytes'))
+        trace.setdefault('clientState', 'PROCESSING')
+        trace.setdefault('stateReason', 'UNKNOWN')
 
         dest_file_paths = item['dest_file_paths']
 
@@ -1057,6 +1057,15 @@ class DownloadClient:
         """
         logger = self.logger
         merged_items_with_sources = []
+
+        # if excluding tapes, we need to list them first
+        tape_rses = []
+        if self.is_tape_excluded:
+            try:
+                tape_rses = [endp['rse'] for endp in self.client.list_rses(rse_expression='istape=true')]
+            except:
+                logger.debug('No tapes found.')
+
         for item in merged_items:
             # since we're using metalink we need to explicitly give all schemes
             schemes = item.get('force_scheme')
@@ -1064,10 +1073,8 @@ class DownloadClient:
                 schemes = schemes if isinstance(schemes, list) else [schemes]
             logger.debug('schemes: %s' % schemes)
 
-            # extend RSE expression to exclude tape RSEs for non-admin accounts
+            # RSE expression, still with tape endpoints included
             rse_expression = item.get('rse')
-            if self.is_tape_excluded:
-                rse_expression = '*\istape=true' if not rse_expression else '(%s)\istape=true' % rse_expression  # NOQA: W605
             logger.debug('rse_expression: %s' % rse_expression)
 
             # get PFNs of files and datasets
@@ -1093,6 +1100,16 @@ class DownloadClient:
                     logger.error('DID does not exist: %s' % input_did)
                     # TODO: store did directly as DIDType object
                     file_items.append({'did': str(input_did), 'adler32': None, 'md5': None, 'sources': [], 'parent_dids': set()})
+
+            # filtering out tape sources
+            if self.is_tape_excluded:
+                for item in file_items:
+                    sources = item['sources']
+                    for src in item['sources']:
+                        if src in tape_rses:
+                            sources.remove(src)
+                    if not sources:
+                        logger.warning('Requested did {} has only replicas on tape. No files will be download.'.format(item['did']))
 
             nrandom = item.get('nrandom')
             if nrandom:
@@ -1170,7 +1187,7 @@ class DownloadClient:
 
                     destinations = options['destinations']
                     dataset_scope, dataset_name = self._split_did_str(dataset_did_str)
-                    paths = [os.path.join(self._prepare_dest_dir(dest[0], dataset_name, file_did_name, dest[1]), file_did_name) for dest in destinations]
+                    paths = [os.path.join(self._prepare_dest_dir(dest[0], dataset_name, dest[1]), file_did_name) for dest in destinations]
                     if any(path in all_dest_file_paths for path in paths):
                         raise RucioException("Multiple file items with same destination file path")
 
@@ -1188,7 +1205,7 @@ class DownloadClient:
                         logger.error('No input options available for %s' % file_did_str)
                         continue
                     destinations = options['destinations']
-                    paths = [os.path.join(self._prepare_dest_dir(dest[0], file_did_scope, file_did_name, dest[1]), file_did_name) for dest in destinations]
+                    paths = [os.path.join(self._prepare_dest_dir(dest[0], file_did_scope, dest[1]), file_did_name) for dest in destinations]
                     if any(path in all_dest_file_paths for path in paths):
                         raise RucioException("Multiple file items with same destination file path")
                     all_dest_file_paths.update(paths)
@@ -1336,7 +1353,7 @@ class DownloadClient:
                 if pack is None:
                     scope = file_item['scope']
                     first_dest = next(iter(file_item['merged_options']['destinations']))
-                    dest_path = os.path.join(self._prepare_dest_dir(first_dest[0], scope, cea_id, first_dest[1]), cea_id)
+                    dest_path = os.path.join(self._prepare_dest_dir(first_dest[0], scope, first_dest[1]), cea_id)
                     pack = {'scope': scope,
                             'name': cea_id,
                             'dest_file_paths': [dest_path],
@@ -1382,29 +1399,21 @@ class DownloadClient:
 
         return did_scope, did_name
 
-    def _prepare_dest_dir(self, base_dir, dest_dir_name, file_name, no_subdir):
+    @staticmethod
+    def _prepare_dest_dir(base_dir, dest_dir_name, no_subdir):
         """
-        Builds the final destination path for a file and:
-            1. deletes existing files if no_subdir was given
-            2. creates the destination directory if it's not existent
+        Builds the final destination path for a file and creates the
+        destination directory if it's not existent.
         (This function is meant to be used as class internal only)
 
         :param base_dir: base directory part
         :param dest_dir_name: name of the destination directory
-        :param file_name: name of the file that will be downloaded
         :param no_subdir: if no subdirectory should be created
 
         :returns: the absolut path of the destination directory
         """
-        dest_dir_path = os.path.abspath(base_dir)
-        # if no subdirectory is used, existing files will be overwritten
-        if no_subdir:
-            dest_file_path = os.path.join(dest_dir_path, file_name)
-            if os.path.isfile(dest_file_path):
-                self.logger.debug('Deleting existing file: %s' % dest_file_path)
-                os.remove(dest_file_path)
-        else:
-            dest_dir_path = os.path.join(dest_dir_path, dest_dir_name)
+        # append dest_dir_name, if subdir should be used
+        dest_dir_path = os.path.join(os.path.abspath(base_dir), '' if no_subdir else dest_dir_name)
 
         if not os.path.isdir(dest_dir_path):
             os.makedirs(dest_dir_path)
